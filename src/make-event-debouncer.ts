@@ -1,7 +1,8 @@
 import type { Logger } from 'pino'
 
 export type EventDebouncerOptions<M> = {
-	publish: (event: keyof M, data: M[keyof M][], ownerId: string) => void
+	/** actually flush the events */
+	publish: (event: keyof M, data: M[keyof M][], ownerId: string) => Promise<void>
 	logger: Logger
 	/** regular flush interval */
 	eventsPushIntervalMs?: number
@@ -9,13 +10,24 @@ export type EventDebouncerOptions<M> = {
 	maxEventsForFlush: number
 }
 
+/**
+ * Event debouncer batches events by event type and owner id,
+ * and flushes them either at regular intervals if specified
+ * or when the threshold is reached
+ * or when asked for using the flush() function
+ * @param options config options for the debouncer
+ */
 export default function makeEventDebouncer<M>({ publish, logger, eventsPushIntervalMs, maxEventsForFlush }: EventDebouncerOptions<M>) {
 	logger = logger.child({ stream: 'events-manager' })
 
+	/// total pending events to flush
 	let eventCount = 0
+	/// map of pending events
 	let events: { [K in keyof M]?: { [ownerId: string]: M[K][] } } = { }
+	/// regular flush interval
 	let interval: NodeJS.Timeout | undefined = undefined
 
+	/** push out all pending events */
 	const flush = async() => {
 		if(!eventCount) {
 			return
@@ -64,6 +76,10 @@ export default function makeEventDebouncer<M>({ publish, logger, eventsPushInter
 	}
 
 	return {
+		/**
+		 * add pending event to the existing batch
+		 * use flush() to publish immediately
+		 * */
 		publish<Event extends keyof M>(event: Event, data: M[Event], ownerId: string) {
 			let map = events[event]
 			if(!events[event]) {
