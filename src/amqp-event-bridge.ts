@@ -32,7 +32,7 @@ type SubscriptionOptions<M, E extends keyof M> = {
 
 export type AMQPEventBridgeOptions = {
 	amqpUri: string
-	maxMessagesPerWorker: number
+	maxMessagesPerWorker?: number
 	logger?: Logger
 
 	eventsExchangeNamePrefix?: string
@@ -77,7 +77,9 @@ export function makeAmqpEventBridge<M>(
 	})
 
 	async function setupMain(channel: ConfirmChannel) {
-		await channel.prefetch(maxMessagesPerWorker)
+		if(maxMessagesPerWorker) {
+			await channel.prefetch(maxMessagesPerWorker)
+		}
 
 		logger.info('opened channel')
 	}
