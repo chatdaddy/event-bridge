@@ -3,7 +3,7 @@ import type { ConfirmChannel, ConsumeMessage } from 'amqplib'
 import { randomBytes } from 'crypto'
 import P, { Logger } from 'pino'
 import makeEventDebouncer, { EventDebouncerOptions } from './make-event-debouncer'
-import { V8Serializer } from './serializer'
+import { Serializer, V8Serializer } from './serializer'
 
 type SubscriptionListener<M> = (data: M[], ownerId: string, msgId: string) => Promise<void>
 
@@ -30,10 +30,11 @@ type SubscriptionOptions<M, E extends keyof M> = {
 	listener: SubscriptionListener<M[E]>
 }
 
-export type AMQPEventBridgeOptions = {
+export type AMQPEventBridgeOptions<Event> = {
 	amqpUri: string
 	maxMessagesPerWorker?: number
 	logger?: Logger
+	serializer?: Serializer<Event>
 
 	eventsExchangeNamePrefix?: string
 } & Pick<EventDebouncerOptions<any>, 'eventsPushIntervalMs' | 'maxEventsForFlush'>
@@ -47,13 +48,14 @@ export function makeAmqpEventBridge<M>(
 		maxMessagesPerWorker,
 		logger: _logger,
 		maxEventsForFlush,
-		eventsPushIntervalMs
-	}: AMQPEventBridgeOptions
+		eventsPushIntervalMs,
+		serializer
+	}: AMQPEventBridgeOptions<keyof M>
 ) {
 	type E = keyof M
 	eventsExchangeNamePrefix = eventsExchangeNamePrefix || ''
 
-	const { encode, decode } = V8Serializer
+	const { encode, decode } = serializer || V8Serializer
 
 	const logger = (_logger || P({ level: 'trace' }))
 	const subscriptions: { [exchange: string]: Promise<Subscription> | undefined } = {}
@@ -100,16 +102,16 @@ export function makeAmqpEventBridge<M>(
 	}
 
 	async function consumerHandler(sub: Subscription, msg: ConsumeMessage) {
-		const json = decode(msg.content)
 		const exchange = msg.fields.exchange
 		const msgId = msg.properties.correlationId
 		// owner ID is in the routing key
 		const ownerId = msg.fields.routingKey
 
 		try {
+			const data = decode(msg.content, exchange as E)
 			const listener = sub?.listeners[exchange]
 			if(listener) {
-				await listener?.(json, ownerId, msgId)
+				await listener?.(data, ownerId, msgId)
 
 				logger.trace(
 					{ exchange, id: msgId, ownerId },
@@ -192,7 +194,7 @@ export function makeAmqpEventBridge<M>(
 		await channel.publish(
 			exchange,
 			ownerId,
-			encode(data),
+			encode(data, event),
 			{
 				correlationId: messageId,
 				contentType: 'application/octet-stream'

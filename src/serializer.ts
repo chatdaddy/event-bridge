@@ -1,11 +1,11 @@
 import { deserialize as V8Decode, serialize as V8Encode } from 'v8'
 
-export type Serializer<T extends string | Buffer> = {
-    encode: (obj: any) => T
-    decode: (enc: T) => any
+export type Serializer<Event> = {
+    encode: (obj: any, event: Event) => Buffer
+    decode: (enc: Buffer, event: Event) => any
 }
 
-export const V8Serializer: Serializer<Buffer> = {
+export const V8Serializer: Serializer<any> = {
 	encode: obj => {
 		try {
 			return V8Encode(obj)
