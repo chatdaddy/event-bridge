@@ -5,7 +5,7 @@ import P, { Logger } from 'pino'
 import makeEventDebouncer, { EventDebouncerOptions } from './make-event-debouncer'
 import { Serializer, V8Serializer } from './serializer'
 
-type SubscriptionListener<M> = (data: M[], ownerId: string, msgId: string) => Promise<void>
+type SubscriptionListener<M> = (data: M[], ownerId: string, msgId: string) => Promise<void> | void
 
 type Subscription = {
 	queueName: string
