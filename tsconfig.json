@@ -13,8 +13,6 @@
     "forceConsistentCasingInFileNames": true,
     "declaration": true,
     "resolveJsonModule": true,
-    "experimentalDecorators": true,
-    "emitDecoratorMetadata": true,
     "lib": [ "es2020" ]
   },
   "include": [
