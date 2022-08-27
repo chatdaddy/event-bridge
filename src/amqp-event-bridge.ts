@@ -35,15 +35,12 @@ export type AMQPEventBridgeOptions<Event> = {
 	maxMessagesPerWorker?: number
 	logger?: Logger
 	serializer?: Serializer<Event>
-
-	eventsExchangeNamePrefix?: string
 } & Pick<EventDebouncerOptions<any>, 'eventsPushIntervalMs' | 'maxEventsForFlush'>
 
 export type AMQPEventBridge<M> = ReturnType<typeof makeAmqpEventBridge<M>>
 
 export function makeAmqpEventBridge<M>(
 	{
-		eventsExchangeNamePrefix,
 		amqpUri,
 		maxMessagesPerWorker,
 		logger: _logger,
@@ -53,7 +50,6 @@ export function makeAmqpEventBridge<M>(
 	}: AMQPEventBridgeOptions<keyof M>
 ) {
 	type E = keyof M
-	eventsExchangeNamePrefix = eventsExchangeNamePrefix || ''
 
 	const { encode, decode } = serializer || V8Serializer
 
@@ -185,11 +181,10 @@ export function makeAmqpEventBridge<M>(
 	}
 
 	async function publish<Event extends E>(event: Event, data: M[Event][], ownerId: string) {
-		const exchange = eventsExchangeNamePrefix + event.toString()
+		const exchange = event.toString()
 		await assertExchangeIfRequired(exchange, channel)
 
 		const messageId = randomBytes(8).toString('hex')
-		logger.trace({ exchange, items: data.length }, 'published')
 
 		await channel.publish(
 			exchange,
@@ -200,6 +195,8 @@ export function makeAmqpEventBridge<M>(
 				contentType: 'application/octet-stream'
 			}
 		)
+
+		logger.trace({ exchange, items: data.length, ownerId }, 'published')
 	}
 
 	return {
