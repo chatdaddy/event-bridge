@@ -67,12 +67,21 @@ export function makeAmqpEventBridge<M>(
 	const conn = AMQP.connect([amqpUri], { })
 	const channel = conn.createChannel({ setup: setupMain })
 
+	let opened = false
+
 	channel.on('error', error => {
 		logger.error(`error in channel: ${error}`)
 	})
 	conn.on('disconnect', (arg) => {
 		logger.error(`error in connection: ${arg.err}`)
+		opened = false
 	})
+
+	async function waitForOpen() {
+		if(!opened) {
+			await channel.waitForConnect()
+		}
+	}
 
 	async function setupMain(channel: ConfirmChannel) {
 		if(maxMessagesPerWorker) {
@@ -80,6 +89,7 @@ export function makeAmqpEventBridge<M>(
 		}
 
 		logger.info('opened channel')
+		opened = true
 	}
 
 	async function consume(sub: Subscription) {
@@ -181,6 +191,7 @@ export function makeAmqpEventBridge<M>(
 	}
 
 	async function publish<Event extends E>(event: Event, data: M[Event][], ownerId: string) {
+		await waitForOpen()
 		const exchange = event.toString()
 		await assertExchangeIfRequired(exchange, channel)
 
@@ -201,9 +212,7 @@ export function makeAmqpEventBridge<M>(
 
 	return {
 		...eventDebouncer,
-		async waitForOpen() {
-			await channel.waitForConnect()
-		},
+		waitForOpen,
 		async close() {
 			eventDebouncer.close()
 			await Promise.all(
@@ -235,6 +244,7 @@ export function makeAmqpEventBridge<M>(
 			event,
 			listener
 		}: SubscriptionOptions<M, Event>) {
+			await waitForOpen()
 			const key = subscriptionId || makeRandomQueueName()
 			// match specific owner if specified
 			// or wildcard match
