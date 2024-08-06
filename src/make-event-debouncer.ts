@@ -1,14 +1,4 @@
-import type { Logger } from 'pino'
-
-export type EventDebouncerOptions<M> = {
-	/** actually flush the events */
-	publish: (event: keyof M, data: M[keyof M][], ownerId: string) => Promise<void>
-	logger: Logger
-	/** regular flush interval */
-	eventsPushIntervalMs?: number
-	/** max events to take in before initiating a flush */
-	maxEventsForFlush: number
-}
+import type { EventDebouncerOptions } from "./types"
 
 /**
  * Event debouncer batches events by event type and owner id,
@@ -17,7 +7,10 @@ export type EventDebouncerOptions<M> = {
  * or when asked for using the flush() function
  * @param options config options for the debouncer
  */
-export default function makeEventDebouncer<M>({ publish, logger, eventsPushIntervalMs, maxEventsForFlush }: EventDebouncerOptions<M>) {
+export default function makeEventDebouncer<M>({
+	publish, logger,
+	eventsPushIntervalMs, maxEventsForFlush
+}: EventDebouncerOptions<M>) {
 	logger = logger.child({ stream: 'events-manager' })
 
 	/// total pending events to flush
@@ -71,7 +64,10 @@ export default function makeEventDebouncer<M>({ publish, logger, eventsPushInter
 	}
 
 	if(eventsPushIntervalMs) {
-		logger.trace({ ms: eventsPushIntervalMs }, 'starting regular flush...')
+		logger.trace(
+			{ ms: eventsPushIntervalMs },
+			'starting regular flush...'
+		)
 		interval = setInterval(flush, eventsPushIntervalMs)
 	}
 
@@ -80,7 +76,11 @@ export default function makeEventDebouncer<M>({ publish, logger, eventsPushInter
 		 * add pending event to the existing batch
 		 * use flush() to publish immediately
 		 * */
-		publish<Event extends keyof M>(event: Event, data: M[Event], ownerId: string) {
+		publish<Event extends keyof M>(
+			event: Event,
+			data: M[Event],
+			ownerId: string
+		) {
 			let map = events[event]
 			if(!events[event]) {
 				map = { }
@@ -100,7 +100,7 @@ export default function makeEventDebouncer<M>({ publish, logger, eventsPushInter
 		},
 		flush,
 		close() {
-			clearInterval(interval!)
+			clearInterval(interval)
 		}
 	}
 }

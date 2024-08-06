@@ -1,43 +1,10 @@
 import AMQP from 'amqp-connection-manager'
 import type { ConfirmChannel, ConsumeMessage } from 'amqplib'
 import { randomBytes } from 'crypto'
-import P, { Logger } from 'pino'
-import makeEventDebouncer, { EventDebouncerOptions } from './make-event-debouncer'
-import { Serializer, V8Serializer } from './serializer'
-
-type SubscriptionListener<M> = (data: M[], ownerId: string, msgId: string) => Promise<void> | void
-
-type Subscription = {
-	queueName: string
-	consumerTag?: string
-	listeners: { [exchange: string]: SubscriptionListener<any> }
-}
-
-type SubscriptionOptions<M, E extends keyof M> = {
-	/**
-	 * only listen for events for this particular owner;
-	 * if not provided, listen for events for all owners
-	 * */
-	ownerId?: string
-	/**
-	 * specify the queue to use;
-	 * only one of all workers subscribing
-	 * with the same subscription ID
-	 * will receive the event
-	 */
-	subscriptionId?: string
-	event: E
-	listener: SubscriptionListener<M[E]>
-}
-
-export type AMQPEventBridgeOptions<Event> = {
-	amqpUri: string
-	maxMessagesPerWorker?: number
-	logger?: Logger
-	serializer?: Serializer<Event>
-} & Pick<EventDebouncerOptions<any>, 'eventsPushIntervalMs' | 'maxEventsForFlush'>
-
-export type AMQPEventBridge<M> = ReturnType<typeof makeAmqpEventBridge<M>>
+import P from 'pino'
+import makeEventDebouncer from './make-event-debouncer'
+import { V8Serializer } from './serializer'
+import { AMQPEventBridge, AMQPEventBridgeOptions, Subscription, SubscriptionListener, SubscriptionOptions } from './types'
 
 export function makeAmqpEventBridge<M>(
 	{
@@ -48,7 +15,7 @@ export function makeAmqpEventBridge<M>(
 		eventsPushIntervalMs,
 		serializer
 	}: AMQPEventBridgeOptions<keyof M>
-) {
+): AMQPEventBridge<M> {
 	type E = keyof M
 
 	const { encode, decode } = serializer || V8Serializer
@@ -69,13 +36,107 @@ export function makeAmqpEventBridge<M>(
 
 	let opened = false
 
-	channel.on('error', error => {
-		logger.error(`error in channel: ${error}`)
+	channel.on('error', err => {
+		logger.error({ err }, 'error in channel')
 	})
 	conn.on('disconnect', (arg) => {
-		logger.error(`error in connection: ${arg.err}`)
+		logger.error({ err: arg.err }, 'error in connection')
 		opened = false
 	})
+
+	return {
+		...eventDebouncer,
+		waitForOpen,
+		async close() {
+			eventDebouncer.close()
+			await Promise.all(
+				Object.keys(subscriptions).map(async k => {
+					const v = subscriptions[k]
+					await clearSubscription(await v!)
+				})
+			)
+			try {
+				await channel.close()
+				await conn.close()
+			} catch(error) {
+
+			}
+
+			logger.info('closed')
+		},
+		async subscribe<Event extends E>({
+			ownerId,
+			subscriptionId,
+			event,
+			listener
+		}: SubscriptionOptions<M, Event>) {
+			await waitForOpen()
+			const key = subscriptionId || makeRandomQueueName()
+			// match specific owner if specified
+			// or wildcard match
+			const matchPattern = ownerId || '*'
+
+			if(!subscriptions[key]) {
+				logger.debug({ queueName: key }, 'creating subscription')
+				subscriptions[key] = createSubscription(key)
+					.catch(err => {
+						delete subscriptions[key]
+						throw err
+					})
+			}
+
+			const subPromise = subscriptions[key]!
+			const newListenerPromise = subPromise
+				.then(
+					async sub => {
+						await addListenerToSubscription(sub, event.toString(), matchPattern, listener)
+						return sub
+					}
+				)
+			subscriptions[key] = newListenerPromise
+				.catch(() => {
+					// if the thing errored out
+					// revert to existing sub
+					subscriptions[key] = subPromise
+					return subPromise
+				})
+
+			await newListenerPromise
+
+			return async(unbind = false) => {
+				const existingSub = subscriptions[key]
+				const removePromise = existingSub?.then(
+					async sub => {
+						await removeSubscriptionListener(
+							sub,
+							event.toString(),
+							matchPattern,
+							unbind
+						)
+
+						if(!Object.keys(sub.listeners).length) {
+							await clearSubscription(sub)
+							delete subscriptions[key]
+							logger.trace(
+								{ queue: sub.queueName },
+								'cleared sub'
+							)
+						}
+
+						return sub
+					}
+				)
+				// queue the remove promise
+				// revert to existing sub if it errors out
+				subscriptions[key] = removePromise!
+					.catch(() => existingSub!)
+
+				await removePromise
+			}
+		},
+		subscriptions: () => subscriptions,
+	}
+
 
 	async function waitForOpen() {
 		if(!opened) {
@@ -124,7 +185,10 @@ export function makeAmqpEventBridge<M>(
 					'handled msg'
 				)
 			} else {
-				logger.warn({ fields: msg.fields }, 'recv msg with no handler')
+				logger.warn(
+					{ fields: msg.fields },
+					'recv msg with no handler'
+				)
 			}
 
 			channel.ack(msg)
@@ -137,7 +201,7 @@ export function makeAmqpEventBridge<M>(
 		}
 	}
 
-	const createSubscription = async(queueName: string) => {
+	async function createSubscription(queueName: string) {
 		const binding: Subscription = {
 			queueName,
 			listeners: { },
@@ -146,17 +210,20 @@ export function makeAmqpEventBridge<M>(
 		return binding
 	}
 
-	const addListenerToSubscription = async(
+	async function addListenerToSubscription(
 		sub: Subscription,
 		exchangeName: string,
 		routingKey: string,
 		listener: SubscriptionListener<any>
-	) => {
+	) {
 		sub.listeners[exchangeName] = listener
 		await assertExchangeIfRequired(exchangeName, channel)
 		await channel.bindQueue(sub.queueName, exchangeName, routingKey)
 
-		logger.trace({ exchangeName, queueName: sub.queueName, routingKey }, 'bound to exchange')
+		logger.trace(
+			{ exchangeName, queueName: sub.queueName, routingKey },
+			'bound to exchange'
+		)
 	}
 
 	async function removeSubscriptionListener(
@@ -208,98 +275,6 @@ export function makeAmqpEventBridge<M>(
 		)
 
 		logger.trace({ exchange, items: data.length, ownerId }, 'published')
-	}
-
-	return {
-		...eventDebouncer,
-		waitForOpen,
-		async close() {
-			eventDebouncer.close()
-			await Promise.all(
-				Object.keys(subscriptions).map(async k => {
-					const v = subscriptions[k]
-					await clearSubscription(await v!)
-				})
-			)
-			try {
-				await channel.close()
-				await conn.close()
-			} catch(error) {
-
-			}
-
-			logger.info('closed')
-		},
-		/**
-		 * Subscribe to an event
-		 * @param event the event to listen for
-		 * @param ownerId optionally, only listen for events of
-		 * this event owner (user, team, workspace -- however you want to term it)
-		 * @param listener event handler
-		 * @returns
-		 */
-		async subscribe<Event extends E>({
-			ownerId,
-			subscriptionId,
-			event,
-			listener
-		}: SubscriptionOptions<M, Event>) {
-			await waitForOpen()
-			const key = subscriptionId || makeRandomQueueName()
-			// match specific owner if specified
-			// or wildcard match
-			const matchPattern = ownerId || '*'
-
-			if(!subscriptions[key]) {
-				logger.debug({ queueName: key }, 'creating subscription')
-				subscriptions[key] = createSubscription(key)
-					.catch(err => {
-						delete subscriptions[key]
-						throw err
-					})
-			}
-
-			const subPromise = subscriptions[key]!
-			const newListenerPromise = subPromise
-				.then(
-					async sub => {
-						await addListenerToSubscription(sub, event.toString(), matchPattern, listener)
-						return sub
-					}
-				)
-			subscriptions[key] = newListenerPromise
-				.catch(() => {
-					// if the thing errored out
-					// revert to existing sub
-					subscriptions[key] = subPromise
-					return subPromise
-				})
-
-			await newListenerPromise
-
-			return async(unbind = false) => {
-				const existingSub = subscriptions[key]
-				const removePromise = existingSub?.then(
-					async sub => {
-						await removeSubscriptionListener(sub, event.toString(), matchPattern, unbind)
-
-						if(!Object.keys(sub.listeners).length) {
-							await clearSubscription(sub)
-							delete subscriptions[key]
-							logger.trace({ queue: sub.queueName }, 'cleared sub')
-						}
-
-						return sub
-					}
-				)
-				// queue the remove promise
-				// revert to existing sub if it errors out
-				subscriptions[key] = removePromise!.catch(() => existingSub!)
-
-				await removePromise
-			}
-		},
-		subscriptions: () => subscriptions,
 	}
 }
 

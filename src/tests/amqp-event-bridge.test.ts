@@ -3,7 +3,8 @@ dotenv.config({ path: '.env.test' })
 
 import { randomBytes } from 'crypto'
 import P from 'pino'
-import { AMQPEventBridge, makeAmqpEventBridge } from '../amqp-event-bridge'
+import { makeAmqpEventBridge } from '../amqp-event-bridge'
+import { AMQPEventBridge } from '../types'
 
 type TestEventMap = {
 	'my-cool-event': { value: number }

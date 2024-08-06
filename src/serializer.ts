@@ -1,9 +1,5 @@
 import { deserialize as V8Decode, serialize as V8Encode } from 'v8'
-
-export type Serializer<Event> = {
-    encode: (obj: any, event: Event) => Buffer
-    decode: (enc: Buffer, event: Event) => any
-}
+import type { Serializer } from './types'
 
 export const V8Serializer: Serializer<any> = {
 	encode: obj => {
