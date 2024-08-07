@@ -10,14 +10,17 @@ import { makeRandomMsgId } from './utils'
 const DEFAULT_PUBLISH_OPTIONS: PublishOptions = {
 	contentType: 'application/octet-stream',
 	persistent: true,
-	timeout: 5_000
+	timeout: 5_000,
 }
+
+// six hours
+const MSG_TIMEOUT_S = 6 * 60 * 60
 
 const DEFAULT_QUEUE_OPTIONS: Options.AssertQueue = {
 	autoDelete: false,
 	durable: true,
 	exclusive: false,
-	messageTtl: 1200,
+	messageTtl: MSG_TIMEOUT_S,
 	arguments: {
 		// quorum queues allow for delivery limits
 		// and retry count tracking
