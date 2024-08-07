@@ -30,7 +30,8 @@ type PendingPublishMap<M> = { [key: string]: PendingPublish<M, keyof M> }
  */
 export default function makeEventDebouncer<M>({
 	publish, logger,
-	eventsPushIntervalMs, maxEventsForFlush
+	eventsPushIntervalMs,
+	maxEventsForFlush
 }: EventDebouncerOptions<M>) {
 	logger = logger.child({ stream: 'events-manager' })
 
@@ -107,6 +108,10 @@ export default function makeEventDebouncer<M>({
 
 		events = {}
 		pendingEventCount = 0
+		// remove timeout -- as we'll flush now
+		// and start a new one if needed
+		clearTimeout(timeout)
+		timeout = undefined
 
 		const failed = await publishBatch(pendingPublishes)
 		logger.debug(
@@ -119,7 +124,6 @@ export default function makeEventDebouncer<M>({
 
 		// add to failed publishes -- so can be retried
 		Object.assign(failedPublishes, failed)
-		startTimeout()
 	}
 
 	async function flushFailedMessages() {

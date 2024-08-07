@@ -17,20 +17,30 @@ export type EventData<M, E extends keyof M> = {
 	messageId?: string
 }
 
-export type EventDebouncerOptions<M> = {
-	/** actually flush the events */
-	publish<E extends keyof M>(d: EventData<M, E>): Promise<void>
-	logger: Logger
+type EventDebouncerConfig = {
 	/** regular flush interval */
 	eventsPushIntervalMs?: number
 	/** max events to take in before initiating a flush */
 	maxEventsForFlush: number
 }
 
-export type SubscriptionListener<M> = (
-	data: M[],
-	ownerId: string,
+
+export type EventDebouncerOptions<M> = EventDebouncerConfig & {
+	/** actually flush the events */
+	publish<E extends keyof M>(d: EventData<M, E>): Promise<void>
+	logger: Logger
+}
+
+type SubscriptionData<M, T extends keyof M> = {
+	event: T
+	data: M[T][]
+	ownerId?: string
 	msgId: string
+	logger: Logger
+}
+
+export type SubscriptionListener<M> = (
+	data: SubscriptionData<M, keyof M>
 ) => Promise<void> | void
 
 export type Subscription = {
@@ -56,17 +66,38 @@ export type SubscriptionOptions<M, E extends keyof M> = {
 	listener: SubscriptionListener<M[E]>
 }
 
-export type AMQPEventBridgeOptions<Event> = {
+export type AMQPEventBridgeOptions<M> = {
 	amqpUri: string
+	/**
+	 * Worker group ID -- all workers with the same
+	 * workerId will share the same queue.
+	 * Queue will only be setup if onEvent is provided
+	 */
+	workerId: string
+	/**
+	 * Events the worker shall listen for
+	 */
+	events: (keyof M)[]
+
+	onEvent?: SubscriptionListener<M>
 	/**
 	 * Maximum number of messages this worker shall
 	 * handle simultaneously
+	 * @default 1
 	 */
 	maxMessagesPerWorker?: number
 	logger?: Logger
-	serializer?: Serializer<Event>
-	defaultPublishOptions?: PublishOptions
-} & Pick<EventDebouncerOptions<any>, 'eventsPushIntervalMs' | 'maxEventsForFlush'>
+	/**
+	 * Msg serializer
+	 * @default V8Serializer
+	 */
+	serializer?: Serializer<keyof M>
+	/**
+	 * Add options to publish events
+	 */
+	publishOptions?: PublishOptions
+	debouncerConfig?: EventDebouncerConfig
+}
 
 export type AMQPEventBridge<M> = {
 	/**
@@ -74,19 +105,6 @@ export type AMQPEventBridge<M> = {
 	 */
 	waitForOpen(): Promise<void>
     close(): Promise<void>
-	/**
-	 * Subscribe to an event
-	 * @param event the event to listen for
-	 * @param ownerId optionally, only listen for events of
-	 * this event owner (user, team, workspace -- however you want to term it)
-	 * @param listener event handler
-	 * @returns fn to cancel the subscription, optional parameter
-	 *  to unbind the queue ( @default false )
-	 */
-    subscribe<Event extends keyof M>(
-		opts: SubscriptionOptions<M, Event>
-	): Promise<(unbind?: boolean) => Promise<void>>
-    subscriptions(): { [id: string]: Promise<Subscription> | undefined }
     publish<E extends keyof M>(
 		event: E,
 		data: M[E],

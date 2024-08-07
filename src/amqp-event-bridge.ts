@@ -1,11 +1,10 @@
-import AMQP from 'amqp-connection-manager'
+import AMQP, { Options } from 'amqp-connection-manager'
 import { PublishOptions } from 'amqp-connection-manager/dist/types/ChannelWrapper'
 import type { ConfirmChannel, ConsumeMessage } from 'amqplib'
-import { randomBytes } from 'crypto'
 import P from 'pino'
 import makeEventDebouncer from './make-event-debouncer'
 import { V8Serializer } from './serializer'
-import { AMQPEventBridge, AMQPEventBridgeOptions, EventData, Subscription, SubscriptionListener, SubscriptionOptions } from './types'
+import { AMQPEventBridge, AMQPEventBridgeOptions, EventData } from './types'
 import { makeRandomMsgId } from './utils'
 
 const DEFAULT_PUBLISH_OPTIONS: PublishOptions = {
@@ -13,36 +12,43 @@ const DEFAULT_PUBLISH_OPTIONS: PublishOptions = {
 	persistent: true,
 }
 
+const DEFAULT_QUEUE_OPTIONS: Options.AssertQueue = {
+	autoDelete: false,
+	durable: true,
+	exclusive: false,
+	messageTtl: 1200
+}
+
 export function makeAmqpEventBridge<M>(
 	{
 		amqpUri,
+		workerId,
+		events,
+		onEvent,
 		maxMessagesPerWorker,
-		logger: _logger,
-		maxEventsForFlush,
-		eventsPushIntervalMs,
+		logger = P(),
 		serializer,
-		defaultPublishOptions,
-	}: AMQPEventBridgeOptions<keyof M>
+		publishOptions,
+		debouncerConfig
+	}: AMQPEventBridgeOptions<M>
 ): AMQPEventBridge<M> {
 	type E = keyof M
 
 	const { encode, decode } = serializer || V8Serializer
-
-	const logger = (_logger || P({ level: 'trace' }))
-	const subscriptions: { [exchange: string]: Promise<Subscription> | undefined } = {}
 	const exchangesAsserted = new Set<string>()
 
 	const eventDebouncer = makeEventDebouncer<M>({
 		publish,
 		logger,
-		maxEventsForFlush,
-		eventsPushIntervalMs
+		maxEventsForFlush: 250,
+		...debouncerConfig,
 	})
 
 	const conn = AMQP.connect([amqpUri], { })
 	const channel = conn.createChannel({ setup: setupMain })
 
 	let opened = false
+	let listenerTag: string | undefined
 
 	channel.on('error', err => {
 		logger.error({ err }, 'error in channel')
@@ -51,23 +57,24 @@ export function makeAmqpEventBridge<M>(
 		logger.error({ err: arg.err }, 'error in connection')
 		opened = false
 	})
+	conn.on('connectFailed', (err) => {
+		logger.error({ err }, 'connect failed')
+	})
 
 	return {
-		__internal: {
-			channel,
-		},
+		__internal: { channel },
 		...eventDebouncer,
 		waitForOpen,
 		async close() {
 			// flush any pending events
 			await eventDebouncer.flush()
-			await Promise.all(
-				Object.keys(subscriptions).map(async k => {
-					const v = subscriptions[k]
-					await clearSubscription(await v!)
-				})
-			)
+
 			try {
+				if(listenerTag) {
+					await channel.cancel(listenerTag)
+					listenerTag = undefined
+				}
+
 				await channel.close()
 				await conn.close()
 			} catch(error) {
@@ -76,79 +83,7 @@ export function makeAmqpEventBridge<M>(
 
 			logger.info('closed')
 		},
-		async subscribe<Event extends E>({
-			ownerId,
-			subscriptionId,
-			event,
-			listener
-		}: SubscriptionOptions<M, Event>) {
-			await waitForOpen()
-			const key = subscriptionId || makeRandomQueueName()
-			// match specific owner if specified
-			// or wildcard match
-			const matchPattern = ownerId || '*'
-
-			if(!subscriptions[key]) {
-				logger.debug({ queueName: key }, 'creating subscription')
-				subscriptions[key] = createSubscription(key)
-					.catch(err => {
-						delete subscriptions[key]
-						throw err
-					})
-			}
-
-			const subPromise = subscriptions[key]!
-			const newListenerPromise = subPromise
-				.then(
-					async sub => {
-						await addListenerToSubscription(sub, event.toString(), matchPattern, listener)
-						return sub
-					}
-				)
-			subscriptions[key] = newListenerPromise
-				.catch(() => {
-					// if the thing errored out
-					// revert to existing sub
-					subscriptions[key] = subPromise
-					return subPromise
-				})
-
-			await newListenerPromise
-
-			return async(unbind = false) => {
-				const existingSub = subscriptions[key]
-				const removePromise = existingSub?.then(
-					async sub => {
-						await removeSubscriptionListener(
-							sub,
-							event.toString(),
-							matchPattern,
-							unbind
-						)
-
-						if(!Object.keys(sub.listeners).length) {
-							await clearSubscription(sub)
-							delete subscriptions[key]
-							logger.trace(
-								{ queue: sub.queueName },
-								'cleared sub'
-							)
-						}
-
-						return sub
-					}
-				)
-				// queue the remove promise
-				// revert to existing sub if it errors out
-				subscriptions[key] = removePromise!
-					.catch(() => existingSub!)
-
-				await removePromise
-			}
-		},
-		subscriptions: () => subscriptions,
 	}
-
 
 	async function waitForOpen() {
 		if(!opened) {
@@ -157,107 +92,89 @@ export function makeAmqpEventBridge<M>(
 	}
 
 	async function setupMain(channel: ConfirmChannel) {
-		if(maxMessagesPerWorker) {
-			await channel.prefetch(maxMessagesPerWorker)
+		try {
+			if(maxMessagesPerWorker) {
+				await channel.prefetch(maxMessagesPerWorker)
+			}
+
+			logger.info('opened channel')
+			opened = true
+
+			if(onEvent) {
+				await startListening(channel)
+			}
+		} catch(err) {
+			logger.error({ err }, 'error in setup')
+			throw err
+		}
+	}
+
+	async function startListening(channel: ConfirmChannel) {
+		await channel.assertQueue(workerId, DEFAULT_QUEUE_OPTIONS)
+
+		logger.debug({ workerId }, 'asserted queue')
+
+		for(const event of events) {
+			const exchange = String(event)
+			await assertExchangeIfRequired(exchange, channel)
+			await channel.bindQueue(workerId, exchange, '*')
 		}
 
-		logger.info('opened channel')
-		opened = true
-	}
-
-	async function consume(sub: Subscription) {
-		const { queueName } = sub
-		// assert queue exists
-		await channel.assertQueue(queueName, { autoDelete: true })
-		logger.debug({ queueName }, 'asserted queue')
+		logger.debug({ workerId, events }, 'bound queue to exchanges')
 		// start the subscription
 		const { consumerTag } = await channel.consume(
-			queueName,
-			msg => consumerHandler(sub, msg),
+			workerId,
+			consumerHandler,
 			{ noAck: false }
 		)
-		sub.consumerTag = consumerTag
-		logger.debug({ queueName, consumerTag }, 'consuming events')
+
+		listenerTag = consumerTag
+		logger.debug({ consumerTag }, 'consuming events')
 	}
 
-	async function consumerHandler(sub: Subscription, msg: ConsumeMessage) {
-		const exchange = msg.fields.exchange
+	async function consumerHandler(msg: ConsumeMessage) {
+		const exchange = msg.fields.exchange as E
 		const msgId = msg.properties.correlationId
 		// owner ID is in the routing key
 		const ownerId = msg.fields.routingKey
+		const retryCount = (msg.fields.deliveryTag - 1) || undefined
 
+		const _logger = logger.child({
+			exchange,
+			ownerId,
+			msgId,
+			retryCount
+		})
+
+		// if the delivery tag > 1 && not redelivered,
+		// then it's a duplicate message
+		// console.log(msg)
+		// if(retryCount && !msg.fields.redelivered) {
+		// 	_logger.info('ignored duplicate msg')
+		// 	channel.ack(msg)
+		// 	return
+		// }
+
+		let data: any
 		try {
-			const data = decode(msg.content, exchange as E)
-			const listener = sub?.listeners[exchange]
-			if(listener) {
-				await listener?.(data, ownerId, msgId)
+			data = decode(msg.content, exchange)
+			await onEvent!({
+				ownerId,
+				msgId,
+				logger: _logger,
+				data,
+				event: exchange,
+			})
 
-				logger.trace(
-					{ exchange, id: msgId, ownerId },
-					'handled msg'
-				)
-			} else {
-				logger.warn(
-					{ fields: msg.fields },
-					'recv msg with no handler'
-				)
-			}
+			_logger.trace(
+				{ exchange, id: msgId, ownerId },
+				'handled msg'
+			)
 
 			channel.ack(msg)
-		} catch(error) {
-			logger.error(
-				{ id: msgId, trace: error.stack },
-				'error in handling msg'
-			)
+		} catch(err) {
+			_logger.error({ data, err }, 'error in handling msg')
 			channel.nack(msg, undefined, true)
-		}
-	}
-
-	async function createSubscription(queueName: string) {
-		const binding: Subscription = {
-			queueName,
-			listeners: { },
-		}
-		await consume(binding)
-		return binding
-	}
-
-	async function addListenerToSubscription(
-		sub: Subscription,
-		exchangeName: string,
-		routingKey: string,
-		listener: SubscriptionListener<any>
-	) {
-		sub.listeners[exchangeName] = listener
-		await assertExchangeIfRequired(exchangeName, channel)
-		await channel.bindQueue(sub.queueName, exchangeName, routingKey)
-
-		logger.trace(
-			{ exchangeName, queueName: sub.queueName, routingKey },
-			'bound to exchange'
-		)
-	}
-
-	async function removeSubscriptionListener(
-		sub: Subscription,
-		exchangeName: string,
-		pattern: string,
-		unbind: boolean
-	) {
-		if(unbind) {
-			await channel.unbindExchange(sub.queueName, exchangeName, pattern)
-			logger.trace({ exchangeName, queue: sub.queueName }, 'unbound exchange')
-		}
-
-		delete sub.listeners[exchangeName]
-	}
-
-	async function clearSubscription(sub: Subscription) {
-		const { consumerTag, queueName } = sub
-		if(consumerTag) {
-			await channel.cancel(consumerTag)
-			sub.consumerTag = undefined
-			logger.trace({ consumerTag, queueName }, 'removed subscription')
 		}
 	}
 
@@ -284,9 +201,9 @@ export function makeAmqpEventBridge<M>(
 			ownerId,
 			encode(data, event),
 			{
-				correlationId: messageId,
+				messageId: messageId,
 				...DEFAULT_PUBLISH_OPTIONS,
-				...defaultPublishOptions,
+				...publishOptions,
 			}
 		)
 
@@ -295,8 +212,4 @@ export function makeAmqpEventBridge<M>(
 			'published'
 		)
 	}
-}
-
-function makeRandomQueueName() {
-	return `rand-${randomBytes(4).toString('hex')}`
 }

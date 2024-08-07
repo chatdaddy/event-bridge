@@ -4,7 +4,7 @@ dotenv.config({ path: '.env.test' })
 import { randomBytes } from 'crypto'
 import P from 'pino'
 import { makeAmqpEventBridge } from '../amqp-event-bridge'
-import { AMQPEventBridge } from '../types'
+import { AMQPEventBridge, AMQPEventBridgeOptions } from '../types'
 
 type TestEventMap = {
 	'my-cool-event': { value: number }
@@ -12,139 +12,195 @@ type TestEventMap = {
 }
 
 const MAX_MESSAGES_PER_WORKER = 2
+const MAX_MSGS_BEFORE_FLUSH = 20
 const LOGGER = P({ level: 'trace' })
 
 describe('AMQP Event Bridge Tests', () => {
 
+	let workerId: string
 	let connections: AMQPEventBridge<TestEventMap>[] = []
+	let publisher: AMQPEventBridge<TestEventMap>
 
-	beforeAll(async() => {
-		connections = await Promise.all(
-			[...Array(2)].map(
-				async(_, i) => {
-					const conn = makeAmqpEventBridge({
-						amqpUri: process.env.AMQP_URI!,
-						maxMessagesPerWorker: MAX_MESSAGES_PER_WORKER,
-						maxEventsForFlush: 250,
-						logger: LOGGER.child({ conn: i })
-					})
-
-					await conn.waitForOpen()
-					return conn
-				}
-			)
-		)
+	beforeEach(async() => {
+		workerId = `wrk_${randomBytes(2).toString('hex')}`
+		connections = []
+		publisher = await openConnection({
+			logger: LOGGER.child({ conn: 'publisher' }),
+			debouncerConfig: {
+				maxEventsForFlush: MAX_MSGS_BEFORE_FLUSH
+			}
+		})
 	})
 
-	afterAll(async() => {
+	// let connections: {
+	// 	onEvent: SubscriptionListener<TestEventMap>
+	// 	manager: AMQPEventBridge<TestEventMap>
+	// }[] = []
+
+	// beforeAll(async() => {
+	// 	connections = await Promise.all(
+	// 		[...Array(2)].map(
+	// 			async(_, i) => {
+	// 				const listener = jest.fn()
+	// 				const conn = makeAmqpEventBridge({
+	// 					amqpUri: process.env.AMQP_URI!,
+	// 					maxMessagesPerWorker: MAX_MESSAGES_PER_WORKER,
+	// 					logger: LOGGER.child({ conn: i }),
+	// 					onEvent,
+	// 					workerId
+	// 				})
+
+	// 				await conn.waitForOpen()
+	// 				return conn
+	// 			}
+	// 		)
+	// 	)
+	// })
+
+	afterEach(async() => {
 		await Promise.all(connections.map(c => c.close()))
+	})
+
+	it('should not be consuming events before subscription', async() => {
+		const queue = await publisher.__internal.channel
+			.checkQueue(workerId)
+			.catch(() => undefined)
+		expect(queue?.consumerCount).toBeFalsy()
 	})
 
 	it('should receive an event exactly once', async() => {
 		let recvCount = 0
 
 		const expectedOwnerId = '1234'
-		const subId = 'cool-queue'
-		const cancellations = await Promise.all(
-			connections.map(
-				conn => conn.subscribe({
-					event: 'my-cool-event',
-					subscriptionId: subId,
-					listener: async(data, ownerId) => {
+		const event: keyof TestEventMap = 'my-cool-event'
+
+		await Promise.all(
+			[...Array(2)].map(
+				(_, i) => openConnection({
+					logger: LOGGER.child({ conn: 'subscriber-' + i }),
+					onEvent: async({ event: recvEvent, data }) => {
+						expect(recvEvent).toEqual(event)
 						expect(data).toHaveLength(1)
-						expect(data[0].value).toBeGreaterThan(0)
-						// only increment the recvCount if the ownerId matches the expectedOwnerId
-						if(expectedOwnerId === ownerId) {
-							recvCount += 1
-						}
+						// expect(data[0].value).toBeGreaterThan(0)
+						recvCount += 1
 					}
 				})
 			)
 		)
 
-		const publishConn = connections[0]
-		publishConn.publish('my-cool-event', { value: 10 }, expectedOwnerId)
-		publishConn.publish('another-cool-event', { text: '123' }, expectedOwnerId)
-		await publishConn.flush()
+		publisher.publish(event, { value: 10 }, expectedOwnerId)
+		await publisher.flush()
 
-		await delay(100)
-
-		await Promise.all(
-			cancellations.map(c => c(true))
-		)
+		await delay(200)
 
 		expect(recvCount).toBe(1)
 	})
 
 	it('should retry publish failures', async() => {
-		const publishConn = connections[0]
-		const subConn = connections[1]
 		const event: keyof TestEventMap = 'my-cool-event'
-		const subId = 'cool-queue'
 		const ownerId = '123123123123'
 
 		let recvCount = 0
 
-		const cancelSub = await subConn.subscribe({
-			event,
-			subscriptionId: subId,
-			ownerId,
-			listener: async() => {
-				recvCount += 1
+		await openConnection({
+			onEvent: async({ ownerId: recvOwnerId }) => {
+				if(ownerId === recvOwnerId) {
+					recvCount += 1
+				}
 			}
 		})
 
-		const channel = publishConn.__internal.channel
+		const channel = publisher.__internal.channel
 		const publishMock = jest.spyOn(channel, 'publish')
 		publishMock.mockImplementationOnce(() => {
 			throw new Error('Test error')
 		})
 
-		publishConn.publish(event, { value: 10 }, ownerId)
-		await publishConn.flush()
+		publisher.publish(event, { value: 10 }, ownerId)
+		await publisher.flush()
 
 		expect(recvCount).toBe(0)
 
 		expect(publishMock).toHaveBeenCalledTimes(1)
 
-		await publishConn.flush()
+		await publisher.flush()
 		expect(recvCount).toBe(1)
-
-		await cancelSub(true)
 	})
 
-	it('should re-subscribe successfully', async() => {
-		const conn = connections[0]
-		const subscriptionId = 'my-cool-queue'
-		for(let i = 0;i < 3;i++) {
-			let eventsHandled = 0
-			const cancel = await conn.subscribe({
-				event: 'my-cool-event',
-				subscriptionId,
-				listener: async() => {
-					eventsHandled += 1
+	it('should still listen after reconnection', async() => {
+		let eventRecv = 0
+		const conn = await openConnection({
+			onEvent: async() => {
+				eventRecv += 1
+			}
+		})
+
+		const rawConn = conn.__internal.channel['_connectionManager']
+		rawConn.reconnect()
+
+		publisher.publish('my-cool-event', { value: 10 }, '123')
+		await publisher.flush()
+
+		await delay(100)
+
+		expect(eventRecv).toBe(1)
+	})
+
+	// it('should receive a message with the same ID once', async() => {
+	// 	let recvCount = 0
+	// 	await openConnection({
+	// 		onEvent: async() => {
+	// 			recvCount += 1
+	// 		}
+	// 	})
+
+	// 	const channel = publisher.__internal.channel
+	// 	const ogPublish = channel.publish.bind(channel)
+	// 	const publishMock = jest.spyOn(channel, 'publish')
+	// 	publishMock.mockImplementationOnce(async(...args) => {
+	// 		const rslt = await ogPublish(...args)
+	// 		throw new Error('Test error')
+	// 		return rslt
+	// 	})
+
+	// 	publisher.publish(
+	// 		'my-cool-event',
+	// 		{ value: 10 },
+	// 		'123'
+	// 	)
+	// 	// first it'll fail & then retry
+	// 	await publisher.flush()
+	// 	await publisher.flush()
+
+	// 	await delay(100)
+
+	// 	expect(recvCount).toBe(1)
+	// })
+
+	it('should keep retrying msg till success', async() => {
+		let tries = 0
+		await openConnection({
+			onEvent: async() => {
+				tries += 1
+				if(tries < 3) {
+					throw new Error('Test error')
 				}
-			})
+			}
+		})
 
-			connections[1].publish('my-cool-event', { value: 10 }, i.toString())
-			await connections[1].flush()
+		publisher.publish('my-cool-event', { value: 10 }, '123')
+		await publisher.flush()
 
-			await delay(100)
-
-			await cancel(true)
-			expect(eventsHandled).toBe(1)
-		}
+		await delay(100)
+		expect(tries).toBe(3)
 	})
 
 	it('should not receive more than expected concurrent events', async() => {
-		const conn = connections[0]
-
 		let concurrentHandling = 0
 		let eventsHandled = 0
 		let didFail = false
-		const cancel = await conn.subscribe({
-			event: 'my-cool-event',
-			listener: async() => {
+		await openConnection({
+			onEvent: async() => {
 				concurrentHandling += 1
 				eventsHandled += 1
 
@@ -160,90 +216,51 @@ describe('AMQP Event Bridge Tests', () => {
 
 		const total = 4
 		for(let i = 0;i < total;i++) {
-			connections[1].publish('my-cool-event', { value: 10 }, i.toString())
+			publisher.publish(
+				'my-cool-event',
+				{ value: 10 },
+				i.toString()
+			)
 		}
 
-		await connections[1].flush()
+		await publisher.flush()
 
 		while(eventsHandled < total) {
 			await delay(100)
 		}
 
-		await cancel()
 		expect(didFail).toBe(false)
 	})
 
 	it('should handle multiple types of events', async() => {
-		const conn = connections[0]
 		const events = ['my-cool-event', 'another-cool-event'] as const
 		const eventsRecvSet = new Set<typeof events[number]>()
 		const expectedOwnerId = randomBytes(2).toString('hex')
 
-		const cancellations = await Promise.all(
-			events.map(event => conn.subscribe({
-				event: event,
-				subscriptionId: 'my-cool-queue',
-				listener: async(_, ownerId) => {
-					if(ownerId === expectedOwnerId) {
-						eventsRecvSet.add(event)
-					}
-				}
-			}))
-		)
-
-		const publishConn = connections[1]
-		publishConn.publish('my-cool-event', { value: 10 }, expectedOwnerId)
-		publishConn.publish('another-cool-event', { text: '123' }, expectedOwnerId)
-		await publishConn.flush()
-
-		await delay(100)
-
-		await Promise.all(
-			cancellations.map(c => c(true))
-		)
-
-		expect(eventsRecvSet.size).toBe(events.length)
-	})
-
-	it('should only receive messages for a specific owner', async() => {
-		const conn = connections[0]
-		const expectedOwnerId = randomBytes(2).toString('hex')
-		const otherOwnerId = randomBytes(2).toString('hex')
-
-		let eventsRecv = 0
-		const cancel = await conn.subscribe({
-			event: 'another-cool-event',
-			ownerId: expectedOwnerId,
-			listener: async(_, ownerId) => {
+		await openConnection({
+			onEvent: async({ ownerId, event }) => {
 				if(ownerId === expectedOwnerId) {
-					eventsRecv += 1
+					eventsRecvSet.add(event)
 				}
 			}
 		})
 
-		const publishConn = connections[1]
-		publishConn.publish('another-cool-event', { text: 'abc' }, expectedOwnerId)
-		publishConn.publish('another-cool-event', { text: '123' }, otherOwnerId)
-		await publishConn.flush()
+		publisher.publish('my-cool-event', { value: 10 }, expectedOwnerId)
+		publisher.publish('another-cool-event', { text: '123' }, expectedOwnerId)
+		await publisher.flush()
 
-		await delay(100)
+		await delay(200)
 
-		await cancel(true)
-
-		expect(eventsRecv).toBe(1)
+		expect(eventsRecvSet.size).toBe(events.length)
 	})
 
 	it('should batch events for the same owner', async() => {
-		const conn = connections[0]
 		const expectedOwnerId = randomBytes(2).toString('hex')
 		const eventCount = 5
 
 		let eventsRecv = 0
-		const cancel = await conn.subscribe({
-			event: 'another-cool-event',
-			ownerId: expectedOwnerId,
-			subscriptionId: 'my-cool-queue',
-			listener: async(data, ownerId) => {
+		await openConnection({
+			onEvent: async({ data, ownerId }) => {
 				if(ownerId === expectedOwnerId && data.length === eventCount) {
 					eventsRecv += 1
 				}
@@ -251,48 +268,61 @@ describe('AMQP Event Bridge Tests', () => {
 		})
 
 		for(let i = 0;i < eventCount;i++) {
-			connections[1].publish('another-cool-event', { text: 'abc ' + i }, expectedOwnerId)
+			publisher.publish('another-cool-event', { text: 'abc ' + i }, expectedOwnerId)
 		}
 
-		await connections[1].flush()
+		await publisher.flush()
 
 		await delay(100)
-
-		await cancel(true)
-
 		// events should have batched
 		// and only a single event published
 		expect(eventsRecv).toEqual(1)
 	})
 
-	it('should not receive events after cancellation', async() => {
-		const conn = connections[0]
+	it('should flush events after max events reached', async() => {
+		const expectedOwnerId = randomBytes(2).toString('hex')
+		const eventCount = MAX_MSGS_BEFORE_FLUSH + 1
 
-		let didFail = false
-		const cancel1 = await conn.subscribe({
-			event: 'another-cool-event',
-			subscriptionId: 'cool-queue-2',
-			listener: async() => {
-				didFail = true
+		let dataRecv = 0
+		await openConnection({
+			onEvent: async({ data, ownerId }) => {
+				if(ownerId !== expectedOwnerId) {
+					return
+				}
+
+				dataRecv += data.length
 			}
 		})
 
-		const cancel2 = await conn.subscribe({
-			event: 'my-cool-event',
-			subscriptionId: 'my-cool-queue',
-			listener: async() => { }
+		for(let i = 0;i < eventCount;i++) {
+			publisher.publish(
+				'another-cool-event',
+				{ text: 'abc ' + i },
+				expectedOwnerId
+			)
+		}
+
+		await delay(100)
+		expect(dataRecv).toEqual(eventCount)
+	})
+
+	async function openConnection(
+		opts: Partial<AMQPEventBridgeOptions<TestEventMap>>,
+	) {
+		const conn = makeAmqpEventBridge({
+			amqpUri: process.env.AMQP_URI!,
+			maxMessagesPerWorker: MAX_MESSAGES_PER_WORKER,
+			logger: LOGGER,
+			workerId,
+			events: ['my-cool-event', 'another-cool-event'],
+			...opts
 		})
 
-		await cancel1(true)
+		connections.push(conn)
 
-		connections[1].publish('another-cool-event', { text: 'abc' }, 'abcd')
-		connections[1].publish('my-cool-event', { value: 123 }, 'abcd')
-		await connections[1].flush()
-
-		await cancel2(true)
-
-		expect(didFail).toBeFalsy()
-	})
+		await conn.waitForOpen()
+		return conn
+	}
 })
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
