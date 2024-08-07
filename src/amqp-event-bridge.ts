@@ -1,10 +1,17 @@
 import AMQP from 'amqp-connection-manager'
+import { PublishOptions } from 'amqp-connection-manager/dist/types/ChannelWrapper'
 import type { ConfirmChannel, ConsumeMessage } from 'amqplib'
 import { randomBytes } from 'crypto'
 import P from 'pino'
 import makeEventDebouncer from './make-event-debouncer'
 import { V8Serializer } from './serializer'
-import { AMQPEventBridge, AMQPEventBridgeOptions, Subscription, SubscriptionListener, SubscriptionOptions } from './types'
+import { AMQPEventBridge, AMQPEventBridgeOptions, EventData, Subscription, SubscriptionListener, SubscriptionOptions } from './types'
+import { makeRandomMsgId } from './utils'
+
+const DEFAULT_PUBLISH_OPTIONS: PublishOptions = {
+	contentType: 'application/octet-stream',
+	persistent: true,
+}
 
 export function makeAmqpEventBridge<M>(
 	{
@@ -13,7 +20,8 @@ export function makeAmqpEventBridge<M>(
 		logger: _logger,
 		maxEventsForFlush,
 		eventsPushIntervalMs,
-		serializer
+		serializer,
+		defaultPublishOptions,
 	}: AMQPEventBridgeOptions<keyof M>
 ): AMQPEventBridge<M> {
 	type E = keyof M
@@ -45,10 +53,14 @@ export function makeAmqpEventBridge<M>(
 	})
 
 	return {
+		__internal: {
+			channel,
+		},
 		...eventDebouncer,
 		waitForOpen,
 		async close() {
-			eventDebouncer.close()
+			// flush any pending events
+			await eventDebouncer.flush()
 			await Promise.all(
 				Object.keys(subscriptions).map(async k => {
 					const v = subscriptions[k]
@@ -257,12 +269,15 @@ export function makeAmqpEventBridge<M>(
 		}
 	}
 
-	async function publish<Event extends E>(event: Event, data: M[Event][], ownerId: string) {
+	async function publish<Event extends E>({
+		event,
+		data,
+		ownerId,
+		messageId = makeRandomMsgId()
+	}: EventData<M, Event>) {
 		await waitForOpen()
 		const exchange = event.toString()
 		await assertExchangeIfRequired(exchange, channel)
-
-		const messageId = randomBytes(8).toString('hex')
 
 		await channel.publish(
 			exchange,
@@ -270,11 +285,15 @@ export function makeAmqpEventBridge<M>(
 			encode(data, event),
 			{
 				correlationId: messageId,
-				contentType: 'application/octet-stream'
+				...DEFAULT_PUBLISH_OPTIONS,
+				...defaultPublishOptions,
 			}
 		)
 
-		logger.trace({ exchange, items: data.length, ownerId }, 'published')
+		logger.trace(
+			{ exchange, items: data.length, ownerId, messageId },
+			'published'
+		)
 	}
 }
 

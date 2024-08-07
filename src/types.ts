@@ -1,3 +1,5 @@
+import { ChannelWrapper } from 'amqp-connection-manager'
+import type { PublishOptions } from 'amqp-connection-manager/dist/types/ChannelWrapper'
 import type { Logger } from 'pino'
 
 export type Serializer<Event> = {
@@ -5,13 +7,19 @@ export type Serializer<Event> = {
     decode<T = any>(enc: Buffer, event: Event): T
 }
 
+export type EventData<M, E extends keyof M> = {
+	event: E
+	data: M[E][]
+	ownerId: string
+	/**
+	 * Idempotency key for the message
+	 */
+	messageId?: string
+}
+
 export type EventDebouncerOptions<M> = {
 	/** actually flush the events */
-	publish(
-		event: keyof M,
-		data: M[keyof M][],
-		ownerId: string
-	): Promise<void>
+	publish<E extends keyof M>(d: EventData<M, E>): Promise<void>
 	logger: Logger
 	/** regular flush interval */
 	eventsPushIntervalMs?: number
@@ -50,12 +58,20 @@ export type SubscriptionOptions<M, E extends keyof M> = {
 
 export type AMQPEventBridgeOptions<Event> = {
 	amqpUri: string
+	/**
+	 * Maximum number of messages this worker shall
+	 * handle simultaneously
+	 */
 	maxMessagesPerWorker?: number
 	logger?: Logger
 	serializer?: Serializer<Event>
+	defaultPublishOptions?: PublishOptions
 } & Pick<EventDebouncerOptions<any>, 'eventsPushIntervalMs' | 'maxEventsForFlush'>
 
 export type AMQPEventBridge<M> = {
+	/**
+	 * Waits for the connection to be open
+	 */
 	waitForOpen(): Promise<void>
     close(): Promise<void>
 	/**
@@ -65,7 +81,7 @@ export type AMQPEventBridge<M> = {
 	 * this event owner (user, team, workspace -- however you want to term it)
 	 * @param listener event handler
 	 * @returns fn to cancel the subscription, optional parameter
-	 *  to unbind the queue (@default false)
+	 *  to unbind the queue ( @default false )
 	 */
     subscribe<Event extends keyof M>(
 		opts: SubscriptionOptions<M, Event>
@@ -76,5 +92,12 @@ export type AMQPEventBridge<M> = {
 		data: M[E],
 		ownerId: string
 	): void
+	/**
+	 * Flushes all pending events
+	 */
     flush(): Promise<void>
+
+	__internal: {
+		channel: ChannelWrapper
+	}
 }

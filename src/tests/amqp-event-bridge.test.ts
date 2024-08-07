@@ -12,6 +12,7 @@ type TestEventMap = {
 }
 
 const MAX_MESSAGES_PER_WORKER = 2
+const LOGGER = P({ level: 'trace' })
 
 describe('AMQP Event Bridge Tests', () => {
 
@@ -25,7 +26,7 @@ describe('AMQP Event Bridge Tests', () => {
 						amqpUri: process.env.AMQP_URI!,
 						maxMessagesPerWorker: MAX_MESSAGES_PER_WORKER,
 						maxEventsForFlush: 250,
-						logger: P({ level: 'trace' }).child({ conn: i })
+						logger: LOGGER.child({ conn: i })
 					})
 
 					await conn.waitForOpen()
@@ -73,6 +74,43 @@ describe('AMQP Event Bridge Tests', () => {
 		)
 
 		expect(recvCount).toBe(1)
+	})
+
+	it('should retry publish failures', async() => {
+		const publishConn = connections[0]
+		const subConn = connections[1]
+		const event: keyof TestEventMap = 'my-cool-event'
+		const subId = 'cool-queue'
+		const ownerId = '123123123123'
+
+		let recvCount = 0
+
+		const cancelSub = await subConn.subscribe({
+			event,
+			subscriptionId: subId,
+			ownerId,
+			listener: async() => {
+				recvCount += 1
+			}
+		})
+
+		const channel = publishConn.__internal.channel
+		const publishMock = jest.spyOn(channel, 'publish')
+		publishMock.mockImplementationOnce(() => {
+			throw new Error('Test error')
+		})
+
+		publishConn.publish(event, { value: 10 }, ownerId)
+		await publishConn.flush()
+
+		expect(recvCount).toBe(0)
+
+		expect(publishMock).toHaveBeenCalledTimes(1)
+
+		await publishConn.flush()
+		expect(recvCount).toBe(1)
+
+		await cancelSub(true)
 	})
 
 	it('should re-subscribe successfully', async() => {

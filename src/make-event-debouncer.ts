@@ -1,10 +1,31 @@
-import type { EventDebouncerOptions } from "./types"
+import type { EventData, EventDebouncerOptions } from './types'
+import { makeRandomMsgId } from './utils'
+
+/**
+ * Map to store pending events -- we store events by
+ * event type and owner id.
+ */
+type PendingEventMap<M> = {
+	[K in keyof M]?: { [ownerId: string]: M[K][] }
+}
+
+type PendingPublish<M, E extends keyof M> = EventData<M, E> & {
+	tries: number
+}
+
+type PendingPublishMap<M> = { [key: string]: PendingPublish<M, keyof M> }
 
 /**
  * Event debouncer batches events by event type and owner id,
- * and flushes them either at regular intervals if specified
- * or when the threshold is reached
- * or when asked for using the flush() function
+ * and flushes them either:
+ * - at regular intervals if specified
+ * - when the threshold is reached
+ * - when asked for using the flush() function
+ *
+ * Will automatically keep retrying failed publishes. If an event fails
+ * to publish -- no guarantee is made that the event will be published
+ * in order. However, the event will be retried until it is published.
+ *
  * @param options config options for the debouncer
  */
 export default function makeEventDebouncer<M>({
@@ -13,68 +34,23 @@ export default function makeEventDebouncer<M>({
 }: EventDebouncerOptions<M>) {
 	logger = logger.child({ stream: 'events-manager' })
 
+	/// published event count
 	/// total pending events to flush
-	let eventCount = 0
+	let pendingEventCount = 0
 	/// map of pending events
-	let events: { [K in keyof M]?: { [ownerId: string]: M[K][] } } = { }
+	let events: PendingEventMap<M> = { }
 	/// regular flush interval
-	let interval: NodeJS.Timeout | undefined = undefined
-
-	/** push out all pending events */
-	const flush = async() => {
-		if(!eventCount) {
-			return
-		}
-
-		logger.debug('flushing events...')
-		const eventsToFlush = events
-		const eventCountToFlush = eventCount
-		events = {}
-		eventCount = 0
-
-		const eventsToFlushList = Object.keys(eventsToFlush) as (keyof M)[]
-
-		await Promise.all(
-			// flush all events
-			eventsToFlushList.flatMap(
-				event => (
-					// flush all owner IDs
-					Object.keys(eventsToFlush[event]!).map(
-						async ownerId => {
-							const events = eventsToFlush[event]![ownerId]
-							try {
-								await publish(event, events, ownerId)
-							} catch(error) {
-								logger.error(
-									{
-										trace: error.stack,
-										length: events.length,
-										event,
-										ownerId
-									},
-									'error in emitting events'
-								)
-							}
-						}
-					)
-				)
-			)
-		)
-		logger.debug(`flushed ${eventCountToFlush} events`)
-	}
-
-	if(eventsPushIntervalMs) {
-		logger.trace(
-			{ ms: eventsPushIntervalMs },
-			'starting regular flush...'
-		)
-		interval = setInterval(flush, eventsPushIntervalMs)
-	}
+	let timeout: NodeJS.Timeout | undefined = undefined
+	// store publishes that failed -- so they can be retried
+	const failedPublishes: PendingPublishMap<M> = {}
+	// create a promise chain to queue failed publishes
+	// avoids simultaneous retries
+	let failedPublishQueue = Promise.resolve()
 
 	return {
 		/**
-		 * add pending event to the existing batch
-		 * use flush() to publish immediately
+		 * add pending event to the existing batch.
+		 * Use flush() to publish immediately
 		 * */
 		publish<Event extends keyof M>(
 			event: Event,
@@ -92,15 +68,111 @@ export default function makeEventDebouncer<M>({
 			}
 
 			map![ownerId].push({ ...data })
-			eventCount += 1
+			pendingEventCount += 1
 
-			if(eventCount > maxEventsForFlush) {
+			if(!timeout) {
+				startTimeout()
+			}
+
+			if(pendingEventCount > maxEventsForFlush) {
 				flush()
 			}
 		},
 		flush,
-		close() {
-			clearInterval(interval)
+	}
+
+	/** push out all pending events */
+	async function flush() {
+		await flushFailedMessages()
+
+		if(!pendingEventCount) {
+			return
+		}
+
+		logger.debug('flushing events...')
+
+		const eventCountToFlush = pendingEventCount
+		const pendingPublishes: PendingPublishMap<M> = { }
+		for(const event in events) {
+			for(const ownerId in events[event]!) {
+				const id = makeRandomMsgId()
+				pendingPublishes[id] = {
+					data: events[event]![ownerId],
+					event: event as keyof M,
+					ownerId,
+					tries: 0
+				}
+			}
+		}
+
+		events = {}
+		pendingEventCount = 0
+
+		const failed = await publishBatch(pendingPublishes)
+		logger.debug(
+			{
+				total: eventCountToFlush,
+				failed: Object.values(failed).length
+			},
+			'flushed events'
+		)
+
+		// add to failed publishes -- so can be retried
+		Object.assign(failedPublishes, failed)
+		startTimeout()
+	}
+
+	async function flushFailedMessages() {
+		const failedCount = Object.keys(failedPublishes).length
+		if(!failedCount) {
+			return
+		}
+
+		failedPublishQueue = failedPublishQueue
+			.then(() => publishBatch(failedPublishes))
+			.then(failed => (
+				logger.info(
+					{
+						total: failedCount,
+						failed: Object.values(failed).length
+					},
+					'flushed failed events'
+				)
+			))
+		await failedPublishQueue
+	}
+
+	/**
+	 * Publishes a batch of events
+	 * @returns map of failed publishes
+	 */
+	async function publishBatch(map: PendingPublishMap<M>) {
+		await Promise.all(Object.entries(map).map(async([id, value]) => {
+			try {
+				await publish(value)
+				delete map[id]
+			} catch(err) {
+				const { data, ...meta } = value
+				logger.error(
+					{ err, length: data.length, ...meta },
+					'error in publishing events'
+				)
+
+				value.tries += 1
+			}
+		}))
+
+		return map
+	}
+
+	function startTimeout() {
+		clearTimeout(timeout)
+		if(eventsPushIntervalMs) {
+			logger.trace(
+				{ ms: eventsPushIntervalMs },
+				'scheduled flush...'
+			)
+			timeout = setTimeout(flush, eventsPushIntervalMs)
 		}
 	}
 }
