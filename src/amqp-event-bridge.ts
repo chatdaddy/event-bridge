@@ -1,4 +1,4 @@
-import AMQP, { Options } from 'amqp-connection-manager'
+import AMQP, { ChannelWrapper, Options } from 'amqp-connection-manager'
 import { PublishOptions } from 'amqp-connection-manager/dist/types/ChannelWrapper'
 import type { ConfirmChannel, ConsumeMessage } from 'amqplib'
 import P from 'pino'
@@ -10,14 +10,22 @@ import { makeRandomMsgId } from './utils'
 const DEFAULT_PUBLISH_OPTIONS: PublishOptions = {
 	contentType: 'application/octet-stream',
 	persistent: true,
+	timeout: 5_000
 }
 
 const DEFAULT_QUEUE_OPTIONS: Options.AssertQueue = {
 	autoDelete: false,
 	durable: true,
 	exclusive: false,
-	messageTtl: 1200
+	messageTtl: 1200,
+	arguments: {
+		// quorum queues allow for delivery limits
+		// and retry count tracking
+		'x-queue-type': 'quorum'
+	}
 }
+
+const DEFAULT_MSGS_TO_FLUSH = 250
 
 export function makeAmqpEventBridge<M>(
 	{
@@ -29,7 +37,8 @@ export function makeAmqpEventBridge<M>(
 		logger = P(),
 		serializer,
 		publishOptions,
-		debouncerConfig
+		debouncerConfig,
+		maxMessageRetries = 3
 	}: AMQPEventBridgeOptions<M>
 ): AMQPEventBridge<M> {
 	type E = keyof M
@@ -40,7 +49,7 @@ export function makeAmqpEventBridge<M>(
 	const eventDebouncer = makeEventDebouncer<M>({
 		publish,
 		logger,
-		maxEventsForFlush: 250,
+		maxEventsForFlush: DEFAULT_MSGS_TO_FLUSH,
 		...debouncerConfig,
 	})
 
@@ -110,7 +119,16 @@ export function makeAmqpEventBridge<M>(
 	}
 
 	async function startListening(channel: ConfirmChannel) {
-		await channel.assertQueue(workerId, DEFAULT_QUEUE_OPTIONS)
+		await channel.assertQueue(
+			workerId,
+			{
+				...DEFAULT_QUEUE_OPTIONS,
+				arguments: {
+					...DEFAULT_QUEUE_OPTIONS.arguments,
+					'x-delivery-limit': maxMessageRetries
+				}
+			}
+		)
 
 		logger.debug({ workerId }, 'asserted queue')
 
@@ -137,18 +155,19 @@ export function makeAmqpEventBridge<M>(
 		const msgId = msg.properties.correlationId
 		// owner ID is in the routing key
 		const ownerId = msg.fields.routingKey
-		const retryCount = (msg.fields.deliveryTag - 1) || undefined
+		const retryCount = +(
+			msg.properties.headers?.['x-delivery-count'] || 0
+		)
 
 		const _logger = logger.child({
 			exchange,
 			ownerId,
 			msgId,
-			retryCount
+			retryCount: retryCount || undefined,
 		})
 
 		// if the delivery tag > 1 && not redelivered,
 		// then it's a duplicate message
-		// console.log(msg)
 		// if(retryCount && !msg.fields.redelivered) {
 		// 	_logger.info('ignored duplicate msg')
 		// 	channel.ack(msg)
@@ -178,7 +197,10 @@ export function makeAmqpEventBridge<M>(
 		}
 	}
 
-	async function assertExchangeIfRequired(exchangeName: string, channel) {
+	async function assertExchangeIfRequired(
+		exchangeName: string,
+		channel: ChannelWrapper | ConfirmChannel
+	) {
 		if(!exchangesAsserted.has(exchangeName)) {
 			// topic exchanges so we can match on routing key
 			await channel.assertExchange(exchangeName, 'topic')

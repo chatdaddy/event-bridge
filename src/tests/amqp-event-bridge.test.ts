@@ -13,6 +13,7 @@ type TestEventMap = {
 
 const MAX_MESSAGES_PER_WORKER = 2
 const MAX_MSGS_BEFORE_FLUSH = 20
+const MAX_MESSAGE_RETRIES = 3
 const LOGGER = P({ level: 'trace' })
 
 describe('AMQP Event Bridge Tests', () => {
@@ -146,38 +147,38 @@ describe('AMQP Event Bridge Tests', () => {
 		expect(eventRecv).toBe(1)
 	})
 
-	// it('should receive a message with the same ID once', async() => {
-	// 	let recvCount = 0
-	// 	await openConnection({
-	// 		onEvent: async() => {
-	// 			recvCount += 1
-	// 		}
-	// 	})
+	it('should receive a message with the same ID once', async() => {
+		let recvCount = 0
+		await openConnection({
+			onEvent: async() => {
+				recvCount += 1
+			}
+		})
 
-	// 	const channel = publisher.__internal.channel
-	// 	const ogPublish = channel.publish.bind(channel)
-	// 	const publishMock = jest.spyOn(channel, 'publish')
-	// 	publishMock.mockImplementationOnce(async(...args) => {
-	// 		const rslt = await ogPublish(...args)
-	// 		throw new Error('Test error')
-	// 		return rslt
-	// 	})
+		const channel = publisher.__internal.channel
+		const ogPublish = channel.publish.bind(channel)
+		const publishMock = jest.spyOn(channel, 'publish')
+		publishMock.mockImplementationOnce(async(...args) => {
+			const rslt = await ogPublish(...args)
+			throw new Error('Test error')
+			return rslt
+		})
 
-	// 	publisher.publish(
-	// 		'my-cool-event',
-	// 		{ value: 10 },
-	// 		'123'
-	// 	)
-	// 	// first it'll fail & then retry
-	// 	await publisher.flush()
-	// 	await publisher.flush()
+		publisher.publish(
+			'my-cool-event',
+			{ value: 10 },
+			'123'
+		)
+		// first it'll fail & then retry
+		await publisher.flush()
+		await publisher.flush()
 
-	// 	await delay(100)
+		await delay(100)
 
-	// 	expect(recvCount).toBe(1)
-	// })
+		expect(recvCount).toBe(1)
+	})
 
-	it('should keep retrying msg till success', async() => {
+	it('should keep retrying msg consumption till success', async() => {
 		let tries = 0
 		await openConnection({
 			onEvent: async() => {
@@ -193,6 +194,22 @@ describe('AMQP Event Bridge Tests', () => {
 
 		await delay(100)
 		expect(tries).toBe(3)
+	})
+
+	it('should not deliver msg after retry limit', async() => {
+		let tries = 0
+		await openConnection({
+			onEvent: async() => {
+				tries += 1
+				throw new Error('Test error')
+			}
+		})
+
+		publisher.publish('my-cool-event', { value: 10 }, '123')
+		await publisher.flush()
+
+		await delay(200)
+		expect(tries).toBe(MAX_MESSAGE_RETRIES + 1)
 	})
 
 	it('should not receive more than expected concurrent events', async() => {
@@ -313,6 +330,7 @@ describe('AMQP Event Bridge Tests', () => {
 			amqpUri: process.env.AMQP_URI!,
 			maxMessagesPerWorker: MAX_MESSAGES_PER_WORKER,
 			logger: LOGGER,
+			maxMessageRetries: MAX_MESSAGE_RETRIES,
 			workerId,
 			events: ['my-cool-event', 'another-cool-event'],
 			...opts

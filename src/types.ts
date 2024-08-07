@@ -86,6 +86,13 @@ export type AMQPEventBridgeOptions<M> = {
 	 * @default 1
 	 */
 	maxMessagesPerWorker?: number
+	/**
+	 * Maximum number of retries for a message after its first
+	 * delivery failure, before it's considered a failure &
+	 * deleted from the queue
+	 * @default 3
+	 */
+	maxMessageRetries?: number
 	logger?: Logger
 	/**
 	 * Msg serializer
