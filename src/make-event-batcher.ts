@@ -1,4 +1,4 @@
-import type { EventData, EventDebouncerOptions } from './types'
+import type { EventBatcherOptions, EventData } from './types'
 import { makeRandomMsgId } from './utils'
 
 /**
@@ -16,7 +16,7 @@ type PendingPublish<M, E extends keyof M> = EventData<M, E> & {
 type PendingPublishMap<M> = { [key: string]: PendingPublish<M, keyof M> }
 
 /**
- * Event debouncer batches events by event type and owner id,
+ * Fn batches events by event type and owner id,
  * and flushes them either:
  * - at regular intervals if specified
  * - when the threshold is reached
@@ -26,13 +26,13 @@ type PendingPublishMap<M> = { [key: string]: PendingPublish<M, keyof M> }
  * to publish -- no guarantee is made that the event will be published
  * in order. However, the event will be retried until it is published.
  *
- * @param options config options for the debouncer
+ * @param options config options
  */
-export default function makeEventDebouncer<M>({
+export default function makeEventBatcher<M>({
 	publish, logger,
 	eventsPushIntervalMs,
 	maxEventsForFlush
-}: EventDebouncerOptions<M>) {
+}: EventBatcherOptions<M>) {
 	logger = logger.child({ stream: 'events-manager' })
 
 	/// published event count
@@ -170,13 +170,18 @@ export default function makeEventDebouncer<M>({
 	}
 
 	function startTimeout() {
-		clearTimeout(timeout)
-		if(eventsPushIntervalMs) {
-			logger.trace(
-				{ ms: eventsPushIntervalMs },
-				'scheduled flush...'
-			)
-			timeout = setTimeout(flush, eventsPushIntervalMs)
+		if(timeout) {
+			return
 		}
+
+		if(!eventsPushIntervalMs) {
+			return
+		}
+
+		logger.trace(
+			{ ms: eventsPushIntervalMs },
+			'scheduled flush...'
+		)
+		timeout = setTimeout(flush, eventsPushIntervalMs)
 	}
 }

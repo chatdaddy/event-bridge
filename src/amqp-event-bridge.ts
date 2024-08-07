@@ -2,7 +2,7 @@ import AMQP, { ChannelWrapper, Options } from 'amqp-connection-manager'
 import { PublishOptions } from 'amqp-connection-manager/dist/types/ChannelWrapper'
 import type { ConfirmChannel, ConsumeMessage } from 'amqplib'
 import P from 'pino'
-import makeEventDebouncer from './make-event-debouncer'
+import makeEventBatcher from './make-event-batcher'
 import { V8Serializer } from './serializer'
 import { AMQPEventBridge, AMQPEventBridgeOptions, EventData } from './types'
 import { makeRandomMsgId } from './utils'
@@ -37,7 +37,7 @@ export function makeAmqpEventBridge<M>(
 		logger = P(),
 		serializer,
 		publishOptions,
-		debouncerConfig,
+		batcherConfig,
 		maxMessageRetries = 3
 	}: AMQPEventBridgeOptions<M>
 ): AMQPEventBridge<M> {
@@ -46,11 +46,11 @@ export function makeAmqpEventBridge<M>(
 	const { encode, decode } = serializer || V8Serializer
 	const exchangesAsserted = new Set<string>()
 
-	const eventDebouncer = makeEventDebouncer<M>({
+	const batcher = makeEventBatcher<M>({
 		publish,
 		logger,
 		maxEventsForFlush: DEFAULT_MSGS_TO_FLUSH,
-		...debouncerConfig,
+		...batcherConfig,
 	})
 
 	const conn = AMQP.connect([amqpUri], { })
@@ -72,11 +72,11 @@ export function makeAmqpEventBridge<M>(
 
 	return {
 		__internal: { channel },
-		...eventDebouncer,
+		...batcher,
 		waitForOpen,
 		async close() {
 			// flush any pending events
-			await eventDebouncer.flush()
+			await batcher.flush()
 
 			try {
 				if(listenerTag) {

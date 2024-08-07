@@ -14,6 +14,7 @@ type TestEventMap = {
 const MAX_MESSAGES_PER_WORKER = 2
 const MAX_MSGS_BEFORE_FLUSH = 20
 const MAX_MESSAGE_RETRIES = 3
+const EVENT_FLUSH_INTERVAL_MS = 200
 const LOGGER = P({ level: 'trace' })
 
 describe('AMQP Event Bridge Tests', () => {
@@ -27,9 +28,6 @@ describe('AMQP Event Bridge Tests', () => {
 		connections = []
 		publisher = await openConnection({
 			logger: LOGGER.child({ conn: 'publisher' }),
-			debouncerConfig: {
-				maxEventsForFlush: MAX_MSGS_BEFORE_FLUSH
-			}
 		})
 	})
 
@@ -73,6 +71,26 @@ describe('AMQP Event Bridge Tests', () => {
 
 		await delay(200)
 
+		expect(recvCount).toBe(1)
+	})
+
+	it('should automatically publish once interval is reached', async() => {
+		let recvCount = 0
+
+		const expectedOwnerId = '1234567'
+		const expectedEvent: keyof TestEventMap = 'my-cool-event'
+
+		await openConnection({
+			onEvent: async({ ownerId }) => {
+				if(ownerId === expectedOwnerId) {
+					recvCount += 1
+				}
+			}
+		})
+
+		publisher.publish(expectedEvent, { value: 1 }, expectedOwnerId)
+		publisher.publish(expectedEvent, { value: 2 }, '')
+		await delay(500)
 		expect(recvCount).toBe(1)
 	})
 
@@ -281,6 +299,10 @@ describe('AMQP Event Bridge Tests', () => {
 			maxMessageRetries: MAX_MESSAGE_RETRIES,
 			workerId,
 			events: ['my-cool-event', 'another-cool-event'],
+			batcherConfig: {
+				maxEventsForFlush: MAX_MSGS_BEFORE_FLUSH,
+				eventsPushIntervalMs: EVENT_FLUSH_INTERVAL_MS
+			},
 			...opts
 		})
 

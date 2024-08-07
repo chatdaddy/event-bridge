@@ -17,14 +17,14 @@ export type EventData<M, E extends keyof M> = {
 	messageId?: string
 }
 
-type EventDebouncerConfig = {
+type EventBatcherConfig = {
 	/** regular flush interval */
 	eventsPushIntervalMs?: number
 	/** max events to take in before initiating a flush */
 	maxEventsForFlush: number
 }
 
-export type EventDebouncerOptions<M> = EventDebouncerConfig & {
+export type EventBatcherOptions<M> = EventBatcherConfig & {
 	/** actually flush the events */
 	publish<E extends keyof M>(d: EventData<M, E>): Promise<void>
 	logger: Logger
@@ -84,7 +84,7 @@ export type AMQPEventBridgeOptions<M> = {
 	 * Add options to publish events
 	 */
 	publishOptions?: PublishOptions
-	debouncerConfig?: EventDebouncerConfig
+	batcherConfig?: EventBatcherConfig
 }
 
 export type AMQPEventBridge<M> = {
