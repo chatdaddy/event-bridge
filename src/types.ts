@@ -24,47 +24,28 @@ type EventDebouncerConfig = {
 	maxEventsForFlush: number
 }
 
-
 export type EventDebouncerOptions<M> = EventDebouncerConfig & {
 	/** actually flush the events */
 	publish<E extends keyof M>(d: EventData<M, E>): Promise<void>
 	logger: Logger
 }
 
+type DataWEvent<M> = {
+	[key in keyof M]: {
+		event: key
+		data: M[key][]
+	}
+}
+
 type SubscriptionData<M, T extends keyof M> = {
-	event: T
-	data: M[T][]
 	ownerId?: string
 	msgId: string
 	logger: Logger
-}
+} & DataWEvent<M>[T]
 
-export type SubscriptionListener<M> = (
-	data: SubscriptionData<M, keyof M>
+export type SubscriptionListener<M, T extends keyof M> = (
+	data: SubscriptionData<M, T>
 ) => Promise<void> | void
-
-export type Subscription = {
-	queueName: string
-	consumerTag?: string
-	listeners: { [exchange: string]: SubscriptionListener<any> }
-}
-
-export type SubscriptionOptions<M, E extends keyof M> = {
-	/**
-	 * only listen for events for this particular owner;
-	 * if not provided, listen for events for all owners
-	 * */
-	ownerId?: string
-	/**
-	 * specify the queue to use;
-	 * only one of all workers subscribing
-	 * with the same subscription ID
-	 * will receive the event
-	 */
-	subscriptionId?: string
-	event: E
-	listener: SubscriptionListener<M[E]>
-}
 
 export type AMQPEventBridgeOptions<M> = {
 	amqpUri: string
@@ -79,7 +60,7 @@ export type AMQPEventBridgeOptions<M> = {
 	 */
 	events: (keyof M)[]
 
-	onEvent?: SubscriptionListener<M>
+	onEvent?: SubscriptionListener<M, keyof M>
 	/**
 	 * Maximum number of messages this worker shall
 	 * handle simultaneously

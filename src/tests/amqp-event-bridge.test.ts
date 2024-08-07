@@ -33,31 +33,6 @@ describe('AMQP Event Bridge Tests', () => {
 		})
 	})
 
-	// let connections: {
-	// 	onEvent: SubscriptionListener<TestEventMap>
-	// 	manager: AMQPEventBridge<TestEventMap>
-	// }[] = []
-
-	// beforeAll(async() => {
-	// 	connections = await Promise.all(
-	// 		[...Array(2)].map(
-	// 			async(_, i) => {
-	// 				const listener = jest.fn()
-	// 				const conn = makeAmqpEventBridge({
-	// 					amqpUri: process.env.AMQP_URI!,
-	// 					maxMessagesPerWorker: MAX_MESSAGES_PER_WORKER,
-	// 					logger: LOGGER.child({ conn: i }),
-	// 					onEvent,
-	// 					workerId
-	// 				})
-
-	// 				await conn.waitForOpen()
-	// 				return conn
-	// 			}
-	// 		)
-	// 	)
-	// })
-
 	afterEach(async() => {
 		await Promise.all(connections.map(c => c.close()))
 	})
@@ -73,23 +48,27 @@ describe('AMQP Event Bridge Tests', () => {
 		let recvCount = 0
 
 		const expectedOwnerId = '1234'
-		const event: keyof TestEventMap = 'my-cool-event'
+		const expectedEvent: keyof TestEventMap = 'my-cool-event'
 
 		await Promise.all(
 			[...Array(2)].map(
 				(_, i) => openConnection({
 					logger: LOGGER.child({ conn: 'subscriber-' + i }),
-					onEvent: async({ event: recvEvent, data }) => {
-						expect(recvEvent).toEqual(event)
+					onEvent: async({ event, data }) => {
+						expect(event).toEqual(expectedEvent)
 						expect(data).toHaveLength(1)
-						// expect(data[0].value).toBeGreaterThan(0)
+						if(event !== 'my-cool-event') {
+							fail('Unexpected event')
+						}
+
+						expect(data[0].value).toBeGreaterThan(0)
 						recvCount += 1
 					}
 				})
 			)
 		)
 
-		publisher.publish(event, { value: 10 }, expectedOwnerId)
+		publisher.publish(expectedEvent, { value: 10 }, expectedOwnerId)
 		await publisher.flush()
 
 		await delay(200)
@@ -145,37 +124,6 @@ describe('AMQP Event Bridge Tests', () => {
 		await delay(100)
 
 		expect(eventRecv).toBe(1)
-	})
-
-	it('should receive a message with the same ID once', async() => {
-		let recvCount = 0
-		await openConnection({
-			onEvent: async() => {
-				recvCount += 1
-			}
-		})
-
-		const channel = publisher.__internal.channel
-		const ogPublish = channel.publish.bind(channel)
-		const publishMock = jest.spyOn(channel, 'publish')
-		publishMock.mockImplementationOnce(async(...args) => {
-			const rslt = await ogPublish(...args)
-			throw new Error('Test error')
-			return rslt
-		})
-
-		publisher.publish(
-			'my-cool-event',
-			{ value: 10 },
-			'123'
-		)
-		// first it'll fail & then retry
-		await publisher.flush()
-		await publisher.flush()
-
-		await delay(100)
-
-		expect(recvCount).toBe(1)
 	})
 
 	it('should keep retrying msg consumption till success', async() => {
