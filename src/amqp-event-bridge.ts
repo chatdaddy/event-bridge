@@ -101,20 +101,15 @@ export function makeAmqpEventBridge<M>(
 	}
 
 	async function setupMain(channel: ConfirmChannel) {
-		try {
-			if(maxMessagesPerWorker) {
-				await channel.prefetch(maxMessagesPerWorker)
-			}
+		if(maxMessagesPerWorker) {
+			await channel.prefetch(maxMessagesPerWorker)
+		}
 
-			logger.info('opened channel')
-			opened = true
+		logger.info('opened channel')
+		opened = true
 
-			if(onEvent) {
-				await startListening(channel)
-			}
-		} catch(err) {
-			logger.error({ err }, 'error in setup')
-			throw err
+		if(onEvent) {
+			await startListening(channel)
 		}
 	}
 

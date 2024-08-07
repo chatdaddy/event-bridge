@@ -285,7 +285,7 @@ describe('AMQP Event Bridge Tests', () => {
 			)
 		}
 
-		await delay(100)
+		await delay(200)
 		expect(dataRecv).toEqual(eventCount)
 	})
 

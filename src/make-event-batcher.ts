@@ -71,9 +71,7 @@ export default function makeEventBatcher<M>({
 			map![ownerId].push({ ...data })
 			pendingEventCount += 1
 
-			if(!timeout) {
-				startTimeout()
-			}
+			startTimeout()
 
 			if(pendingEventCount > maxEventsForFlush) {
 				flush()
