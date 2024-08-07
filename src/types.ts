@@ -43,7 +43,7 @@ type SubscriptionData<M, T extends keyof M> = {
 	logger: Logger
 } & DataWEvent<M>[T]
 
-export type SubscriptionListener<M, T extends keyof M> = (
+export type EventSubscriptionListener<M, T extends keyof M> = (
 	data: SubscriptionData<M, T>
 ) => Promise<void> | void
 
@@ -60,7 +60,7 @@ export type AMQPEventBridgeOptions<M> = {
 	 */
 	events: (keyof M)[]
 
-	onEvent?: SubscriptionListener<M, keyof M>
+	onEvent?: EventSubscriptionListener<M, keyof M>
 	/**
 	 * Maximum number of messages this worker shall
 	 * handle simultaneously
