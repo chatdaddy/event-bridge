@@ -1,4 +1,4 @@
-import { ChannelWrapper } from 'amqp-connection-manager'
+import { ChannelWrapper, Options } from 'amqp-connection-manager'
 import type { PublishOptions } from 'amqp-connection-manager/dist/types/ChannelWrapper'
 import type { Logger } from 'pino'
 
@@ -84,6 +84,7 @@ export type AMQPEventBridgeOptions<M> = {
 	 * Add options to publish events
 	 */
 	publishOptions?: PublishOptions
+	queueOptions?: Options.AssertQueue
 	batcherConfig?: EventBatcherConfig
 }
 

@@ -94,6 +94,56 @@ describe('AMQP Event Bridge Tests', () => {
 		expect(recvCount).toBe(1)
 	})
 
+	it('should receive message if consumer started after message', async() => {
+		let recvCount = 0
+		// just ensure queue exists to store the msg
+		const conn = await openConnection({
+			onEvent: async() => {
+				recvCount += 1
+			}
+		})
+		await conn.close()
+
+		publisher.publish('my-cool-event', { value: 10 }, '123')
+		await publisher.flush()
+
+		await openConnection({
+			onEvent: async() => {
+				recvCount += 1
+			}
+		})
+
+		await delay(200)
+		expect(recvCount).toBe(1)
+	})
+
+	it('should expire message after ttl', async() => {
+		const ttlSeconds = 1
+		publisher = await openConnection({
+			logger: LOGGER.child({ conn: 'publisher' }),
+			events: ['my-cool-event'],
+			workerId,
+			queueOptions: {
+				messageTtl: ttlSeconds,
+			},
+		})
+
+		publisher.publish('my-cool-event', { value: 10 }, '123')
+		await publisher.flush()
+
+		await delay(ttlSeconds + 50)
+
+		let recvCount = 0
+		await openConnection({
+			onEvent: async() => {
+				recvCount += 1
+			}
+		})
+
+		await delay(100)
+		expect(recvCount).toBe(0)
+	})
+
 	it('should retry publish failures', async() => {
 		const event: keyof TestEventMap = 'my-cool-event'
 		const ownerId = '123123123123'

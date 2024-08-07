@@ -40,6 +40,7 @@ export function makeAmqpEventBridge<M>(
 		logger = P(),
 		serializer,
 		publishOptions,
+		queueOptions,
 		batcherConfig,
 		maxMessageRetries = 3
 	}: AMQPEventBridgeOptions<M>
@@ -121,8 +122,10 @@ export function makeAmqpEventBridge<M>(
 			workerId,
 			{
 				...DEFAULT_QUEUE_OPTIONS,
+				...queueOptions,
 				arguments: {
 					...DEFAULT_QUEUE_OPTIONS.arguments,
+					...queueOptions?.arguments,
 					'x-delivery-limit': maxMessageRetries
 				}
 			}
