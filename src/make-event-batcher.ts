@@ -151,7 +151,7 @@ export default function makeEventBatcher<M>({
 	async function publishBatch(map: PendingPublishMap<M>) {
 		await Promise.all(Object.entries(map).map(async([id, value]) => {
 			try {
-				await publish(value)
+				await publish({ messageId: id, ...value })
 				delete map[id]
 			} catch(err) {
 				const { data, ...meta } = value

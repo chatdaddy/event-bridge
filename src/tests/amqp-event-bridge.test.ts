@@ -173,6 +173,12 @@ describe('AMQP Event Bridge Tests', () => {
 
 		await publisher.flush()
 		expect(recvCount).toBe(1)
+
+		// same msg ID should be used for retries
+		const msgIdSet = new Set(
+			publishMock.mock.calls.map(c => c[3]?.messageId)
+		)
+		expect(msgIdSet.size).toBe(1)
 	})
 
 	it('should still listen after reconnection', async() => {
