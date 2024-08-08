@@ -153,7 +153,7 @@ export function makeAmqpEventBridge<M>(
 
 	async function consumerHandler(msg: ConsumeMessage) {
 		const exchange = msg.fields.exchange as E
-		const msgId = msg.properties.correlationId
+		const msgId = msg.properties.messageId
 		// owner ID is in the routing key
 		const ownerId = msg.fields.routingKey
 		const retryCount = +(
