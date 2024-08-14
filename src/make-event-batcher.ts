@@ -1,5 +1,5 @@
 import type { EventBatcherOptions, EventData } from './types'
-import { makeRandomMsgId } from './utils'
+import { makeUqMessageId } from './utils'
 
 /**
  * Map to store pending events -- we store events by
@@ -94,7 +94,7 @@ export default function makeEventBatcher<M>({
 		const pendingPublishes: PendingPublishMap<M> = { }
 		for(const event in events) {
 			for(const ownerId in events[event]!) {
-				const id = makeRandomMsgId()
+				const id = makeUqMessageId()
 				pendingPublishes[id] = {
 					data: events[event]![ownerId],
 					event: event as keyof M,

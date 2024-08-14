@@ -5,7 +5,7 @@ import P from 'pino'
 import makeEventBatcher from './make-event-batcher'
 import { V8Serializer } from './serializer'
 import { AMQPEventBridge, AMQPEventBridgeOptions, EventData } from './types'
-import { makeRandomMsgId } from './utils'
+import { makeUqMessageId, parseMessageId } from './utils'
 
 const DEFAULT_PUBLISH_OPTIONS: PublishOptions = {
 	contentType: 'application/octet-stream',
@@ -179,7 +179,9 @@ export function makeAmqpEventBridge<M>(
 		try {
 			data = decode(msg.content, exchange)
 
-			_logger.info({ data }, 'handling msg')
+			const parsed = parseMessageId(msgId)
+
+			_logger.info({ eventTs: parsed?.dt, data }, 'handling msg')
 
 			await onEvent!({
 				ownerId,
@@ -216,7 +218,7 @@ export function makeAmqpEventBridge<M>(
 		event,
 		data,
 		ownerId,
-		messageId = makeRandomMsgId()
+		messageId = makeUqMessageId()
 	}: EventData<M, Event>) {
 		await waitForOpen()
 		const exchange = event.toString()
