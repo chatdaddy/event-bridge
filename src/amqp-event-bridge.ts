@@ -178,6 +178,9 @@ export function makeAmqpEventBridge<M>(
 		let data: any
 		try {
 			data = decode(msg.content, exchange)
+
+			_logger.info({ data }, 'handling msg')
+
 			await onEvent!({
 				ownerId,
 				msgId,
@@ -193,7 +196,7 @@ export function makeAmqpEventBridge<M>(
 
 			channel.ack(msg)
 		} catch(err) {
-			_logger.error({ data, err }, 'error in handling msg')
+			_logger.error({ err }, 'error in handling msg')
 			channel.nack(msg, undefined, true)
 		}
 	}
