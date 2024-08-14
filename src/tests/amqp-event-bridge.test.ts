@@ -15,6 +15,8 @@ const MAX_MESSAGES_PER_WORKER = 2
 const MAX_MSGS_BEFORE_FLUSH = 20
 const MAX_MESSAGE_RETRIES = 3
 const EVENT_FLUSH_INTERVAL_MS = 200
+const DELAY_RETRY_S = 2
+const MAX_DELAYED_RETRIES = 3
 const LOGGER = P({ level: 'trace' })
 
 describe('AMQP Event Bridge Tests', () => {
@@ -123,8 +125,11 @@ describe('AMQP Event Bridge Tests', () => {
 			logger: LOGGER.child({ conn: 'publisher' }),
 			events: ['my-cool-event'],
 			workerId,
-			queueOptions: {
-				messageTtl: ttlSeconds,
+			queueConfig: {
+				delayedRetrySeconds: 0,
+				options: {
+					messageTtl: ttlSeconds,
+				}
 			},
 		})
 
@@ -224,6 +229,9 @@ describe('AMQP Event Bridge Tests', () => {
 			onEvent: async() => {
 				tries += 1
 				throw new Error('Test error')
+			},
+			queueConfig: {
+				delayedRetrySeconds: 0
 			}
 		})
 
@@ -233,6 +241,34 @@ describe('AMQP Event Bridge Tests', () => {
 		await delay(200)
 		expect(tries).toBe(MAX_MESSAGE_RETRIES + 1)
 	})
+
+	it('should requeue after delay', async() => {
+		const expOwnerId = '123'
+		let tries = 0
+		await openConnection({
+			onEvent: async({ ownerId }) => {
+				expect(ownerId).toBe(expOwnerId)
+				tries += 1
+				throw new Error('Test error')
+			},
+		})
+
+		publisher.publish('my-cool-event', { value: 10 }, expOwnerId)
+		await publisher.flush()
+
+		await delay(200)
+		expect(tries).toBe(MAX_MESSAGE_RETRIES + 1)
+
+		// check if it retries after delay -- and stops after max retries
+		for(let i = 0;i < MAX_DELAYED_RETRIES;i++) {
+			await delay(DELAY_RETRY_S * 1000 + 100)
+			expect(tries).toBe(MAX_MESSAGE_RETRIES + 1 + (i + 1))
+		}
+
+		// ensure no new messages are received
+		await delay(DELAY_RETRY_S * 1000 + 100)
+		expect(tries).toBe(MAX_MESSAGE_RETRIES + 1 + MAX_DELAYED_RETRIES)
+	}, 20_000)
 
 	it('should not receive more than expected concurrent events', async() => {
 		let concurrentHandling = 0
@@ -352,14 +388,19 @@ describe('AMQP Event Bridge Tests', () => {
 			amqpUri: process.env.AMQP_URI!,
 			maxMessagesPerWorker: MAX_MESSAGES_PER_WORKER,
 			logger: LOGGER,
-			maxMessageRetries: MAX_MESSAGE_RETRIES,
 			workerId,
 			events: ['my-cool-event', 'another-cool-event'],
 			batcherConfig: {
 				maxEventsForFlush: MAX_MSGS_BEFORE_FLUSH,
 				eventsPushIntervalMs: EVENT_FLUSH_INTERVAL_MS
 			},
-			...opts
+			...opts,
+			queueConfig: {
+				maxInitialRetries: MAX_MESSAGE_RETRIES,
+				delayedRetrySeconds: DELAY_RETRY_S,
+				maxDelayedRetries: MAX_DELAYED_RETRIES,
+				...opts.queueConfig,
+			},
 		})
 
 		connections.push(conn)

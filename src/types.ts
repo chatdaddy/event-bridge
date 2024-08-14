@@ -67,13 +67,6 @@ export type AMQPEventBridgeOptions<M> = {
 	 * @default 1
 	 */
 	maxMessagesPerWorker?: number
-	/**
-	 * Maximum number of retries for a message after its first
-	 * delivery failure, before it's considered a failure &
-	 * deleted from the queue
-	 * @default 3
-	 */
-	maxMessageRetries?: number
 	logger?: Logger
 	/**
 	 * Msg serializer
@@ -84,7 +77,39 @@ export type AMQPEventBridgeOptions<M> = {
 	 * Add options to publish events
 	 */
 	publishOptions?: PublishOptions
-	queueOptions?: Options.AssertQueue
+	/**
+	 * Configuration for the queue. Changing any of these parameters
+	 * after the queue has been created can possibly lead to the channel
+	 * failing to establish a connection.
+	 */
+	queueConfig?: {
+		/**
+		 * Maximum number of consecutive retries for a message after its first
+		 * delivery failure, before it's considered a failure &
+		 * deleted from the queue.
+		 *
+		 * If delayedRetrySeconds is specified, the message will be
+		 * retried again after the initial maxMessageRetries
+		 * @default 2
+		 */
+		maxInitialRetries?: number
+		/**
+		 * Number of seconds to wait before retrying a failed message.
+		 * Set to 0 to disable delayed retries.
+		 * @default 1h
+		 */
+		delayedRetrySeconds?: number
+		/**
+		 * Maximum number of delayed retries for a message, after which
+		 * the message is considered a failure & deleted from the queue.
+		 * @default 3
+		 */
+		maxDelayedRetries?: number
+		/**
+		 * Queue options
+		 */
+		options?: Options.AssertQueue
+	}
 	batcherConfig?: EventBatcherConfig
 }
 

@@ -3,10 +3,8 @@
 AMQP based pub/sub event manager for reliable event handling. The library aims to:
 - Provide a simple, opinionated, type-safe mechanism for event handling
 - Ensure reliable event delivery, automatically retrying failed events
+- Upon an initial failure of event consumption, the event is retried with an constant backoff strategy
 - Batch publish events to improve processing throughput + keep retrying failed publishes
-
-TODOS:
-- push failed events to dead letter exchange
 
 ## Installation
 

@@ -10,25 +10,27 @@ import { makeUqMessageId, parseMessageId } from './utils'
 const DEFAULT_PUBLISH_OPTIONS: PublishOptions = {
 	contentType: 'application/octet-stream',
 	persistent: true,
-	timeout: 5_000,
+	timeout: 3_000,
 }
 
 // six hours
-const MSG_TIMEOUT_S = 6 * 60 * 60
+const MSG_TIMEOUT_MS = 6 * 60 * 60 * 1000
 
 const DEFAULT_QUEUE_OPTIONS: Options.AssertQueue = {
 	autoDelete: false,
 	durable: true,
 	exclusive: false,
-	messageTtl: MSG_TIMEOUT_S,
+	messageTtl: MSG_TIMEOUT_MS,
 	arguments: {
 		// quorum queues allow for delivery limits
 		// and retry count tracking
-		'x-queue-type': 'quorum'
+		'x-queue-type': 'quorum',
 	}
 }
 
 const DEFAULT_MSGS_TO_FLUSH = 250
+
+const DEFAULT_RETRY_DELAY_S = 60 * 60 // 1h
 
 export function makeAmqpEventBridge<M>(
 	{
@@ -40,15 +42,23 @@ export function makeAmqpEventBridge<M>(
 		logger = P(),
 		serializer,
 		publishOptions,
-		queueOptions,
 		batcherConfig,
-		maxMessageRetries = 3
+		queueConfig: {
+			maxInitialRetries = 2,
+			delayedRetrySeconds = DEFAULT_RETRY_DELAY_S,
+			maxDelayedRetries = 3,
+			options: queueOptions = {}
+		} = {}
 	}: AMQPEventBridgeOptions<M>
 ): AMQPEventBridge<M> {
 	type E = keyof M
 
 	const { encode, decode } = serializer || V8Serializer
 	const exchangesAsserted = new Set<string>()
+
+	const dlxExchangeName = `${workerId}_dlx`
+	const dlxExchangeBackToQueue = `${workerId}_dlx_back_to_queue`
+	const dlxQueueName = `${workerId}_dlx_queue`
 
 	const batcher = makeEventBatcher<M>({
 		publish,
@@ -123,10 +133,13 @@ export function makeAmqpEventBridge<M>(
 			{
 				...DEFAULT_QUEUE_OPTIONS,
 				...queueOptions,
+				deadLetterExchange: delayedRetrySeconds
+					? dlxExchangeName
+					: undefined,
 				arguments: {
 					...DEFAULT_QUEUE_OPTIONS.arguments,
 					...queueOptions?.arguments,
-					'x-delivery-limit': maxMessageRetries
+					'x-delivery-limit': maxInitialRetries,
 				}
 			}
 		)
@@ -140,6 +153,9 @@ export function makeAmqpEventBridge<M>(
 		}
 
 		logger.debug({ workerId, events }, 'bound queue to exchanges')
+
+		await setupDelayedRetry(channel)
+
 		// start the subscription
 		const { consumerTag } = await channel.consume(
 			workerId,
@@ -151,6 +167,35 @@ export function makeAmqpEventBridge<M>(
 		logger.debug({ consumerTag }, 'consuming events')
 	}
 
+	async function setupDelayedRetry(channel: ConfirmChannel) {
+		if(!delayedRetrySeconds) {
+			return
+		}
+
+		await channel.assertExchange(dlxExchangeName, 'fanout')
+		await channel.assertExchange(dlxExchangeBackToQueue, 'fanout')
+		await channel.assertQueue(
+			dlxQueueName,
+			{
+				messageTtl: delayedRetrySeconds * 1000,
+				deadLetterExchange: dlxExchangeBackToQueue,
+				durable: true,
+			}
+		)
+		await channel.bindQueue(dlxQueueName, dlxExchangeName, '')
+		await channel.bindQueue(workerId, dlxExchangeBackToQueue, '')
+
+		logger.info(
+			{
+				delayedRetrySeconds,
+				dlxExchangeName,
+				dlxQueueName,
+				dlxExchangeBackToQueue
+			},
+			'setup DLX exchange'
+		)
+	}
+
 	async function consumerHandler(msg: ConsumeMessage) {
 		const exchange = msg.fields.exchange as E
 		const msgId = msg.properties.messageId
@@ -159,21 +204,16 @@ export function makeAmqpEventBridge<M>(
 		const retryCount = +(
 			msg.properties.headers?.['x-delivery-count'] || 0
 		)
+		const dlxRequeue = msg.properties.headers?.['x-death']
+		const dlxRequeueCount = dlxRequeue?.[0]?.count
 
 		const _logger = logger.child({
 			exchange,
 			ownerId,
 			msgId,
 			retryCount: retryCount || undefined,
+			dlxRequeueCount,
 		})
-
-		// if the delivery tag > 1 && not redelivered,
-		// then it's a duplicate message
-		// if(retryCount && !msg.fields.redelivered) {
-		// 	_logger.info('ignored duplicate msg')
-		// 	channel.ack(msg)
-		// 	return
-		// }
 
 		let data: any
 		try {
@@ -198,8 +238,23 @@ export function makeAmqpEventBridge<M>(
 
 			channel.ack(msg)
 		} catch(err) {
-			_logger.error({ err }, 'error in handling msg')
-			channel.nack(msg, undefined, true)
+			if(dlxRequeueCount && dlxRequeueCount >= maxDelayedRetries) {
+				_logger.error(
+					{ err },
+					'error in handling msg. Final DLX retries exceeded.'
+					+ ' Will not requeue'
+				)
+				channel.ack(msg)
+				return
+			}
+
+			const retryNow = retryCount < maxInitialRetries
+				&& !dlxRequeueCount
+			const errMsg = retryNow
+				? 'error in handling msg'
+				: 'error in handling msg. Will retry later.'
+			_logger.error({ retryNow, err }, errMsg)
+			channel.nack(msg, undefined, retryNow)
 		}
 	}
 
@@ -207,11 +262,13 @@ export function makeAmqpEventBridge<M>(
 		exchangeName: string,
 		channel: ChannelWrapper | ConfirmChannel
 	) {
-		if(!exchangesAsserted.has(exchangeName)) {
-			// topic exchanges so we can match on routing key
-			await channel.assertExchange(exchangeName, 'topic')
-			exchangesAsserted.add(exchangeName)
+		if(exchangesAsserted.has(exchangeName)) {
+			return
 		}
+
+		// topic exchanges so we can match on routing key
+		await channel.assertExchange(exchangeName, 'topic')
+		exchangesAsserted.add(exchangeName)
 	}
 
 	async function publish<Event extends E>({
