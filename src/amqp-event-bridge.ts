@@ -4,12 +4,13 @@ import type { ConfirmChannel, ConsumeMessage } from 'amqplib'
 import P from 'pino'
 import makeEventBatcher from './make-event-batcher'
 import { V8Serializer } from './serializer'
-import { AMQPEventBridge, AMQPEventBridgeOptions, EventData } from './types'
+import { AMQPEventBridge, AMQPEventBridgeOptions, AMQPSubscriberOptions, EventData } from './types'
 import { makeUqMessageId, parseMessageId } from './utils'
 
 const DEFAULT_PUBLISH_OPTIONS: PublishOptions = {
 	contentType: 'application/octet-stream',
 	persistent: true,
+	// 3s timeout
 	timeout: 3_000,
 }
 
@@ -35,23 +36,27 @@ const DEFAULT_RETRY_DELAY_S = 60 * 60 // 1h
 export function makeAmqpEventBridge<M>(
 	{
 		amqpUri,
-		workerId,
-		events,
-		onEvent,
-		maxMessagesPerWorker,
 		logger = P(),
 		serializer,
 		publishOptions,
 		batcherConfig,
+		...rest
+	}: AMQPEventBridgeOptions<M>
+): AMQPEventBridge<M> {
+	type E = keyof M
+
+	const {
+		workerId = '',
+		events = [],
+		onEvent,
+		maxMessagesPerWorker,
 		queueConfig: {
 			maxInitialRetries = 2,
 			delayedRetrySeconds = DEFAULT_RETRY_DELAY_S,
 			maxDelayedRetries = 3,
 			options: queueOptions = {}
 		} = {}
-	}: AMQPEventBridgeOptions<M>
-): AMQPEventBridge<M> {
-	type E = keyof M
+	} = rest as Partial<AMQPSubscriberOptions<M>>
 
 	const { encode, decode } = serializer || V8Serializer
 	const exchangesAsserted = new Set<string>()
@@ -122,12 +127,14 @@ export function makeAmqpEventBridge<M>(
 		logger.info('opened channel')
 		opened = true
 
-		if(onEvent) {
-			await startListening(channel)
+		if(!workerId) {
+			return
 		}
+
+		await startSubscription(channel)
 	}
 
-	async function startListening(channel: ConfirmChannel) {
+	async function startSubscription(channel: ConfirmChannel) {
 		await channel.assertQueue(
 			workerId,
 			{

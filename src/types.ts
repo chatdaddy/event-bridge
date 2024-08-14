@@ -47,8 +47,24 @@ export type EventSubscriptionListener<M, T extends keyof M> = (
 	data: SubscriptionData<M, T>
 ) => Promise<void> | void
 
-export type AMQPEventBridgeOptions<M> = {
+type AMQPBaseOptions<M> = {
 	amqpUri: string
+	/**
+	 * Msg serializer
+	 * @default V8Serializer
+	 */
+	serializer?: Serializer<keyof M>
+	/**
+	 * Add options to publish events
+	 */
+	publishOptions?: PublishOptions
+
+	logger?: Logger
+
+	batcherConfig?: EventBatcherConfig
+}
+
+export type AMQPSubscriberOptions<M> = AMQPBaseOptions<M> & {
 	/**
 	 * Worker group ID -- all workers with the same
 	 * workerId will share the same queue.
@@ -59,24 +75,16 @@ export type AMQPEventBridgeOptions<M> = {
 	 * Events the worker shall listen for
 	 */
 	events: (keyof M)[]
-
-	onEvent?: EventSubscriptionListener<M, keyof M>
+	/**
+	 * Event handler for the worker
+	 */
+	onEvent: EventSubscriptionListener<M, keyof M>
 	/**
 	 * Maximum number of messages this worker shall
 	 * handle simultaneously
 	 * @default 1
 	 */
 	maxMessagesPerWorker?: number
-	logger?: Logger
-	/**
-	 * Msg serializer
-	 * @default V8Serializer
-	 */
-	serializer?: Serializer<keyof M>
-	/**
-	 * Add options to publish events
-	 */
-	publishOptions?: PublishOptions
 	/**
 	 * Configuration for the queue. Changing any of these parameters
 	 * after the queue has been created can possibly lead to the channel
@@ -110,8 +118,10 @@ export type AMQPEventBridgeOptions<M> = {
 		 */
 		options?: Options.AssertQueue
 	}
-	batcherConfig?: EventBatcherConfig
 }
+
+export type AMQPEventBridgeOptions<M> = AMQPSubscriberOptions<M>
+	| AMQPBaseOptions<M>
 
 export type AMQPEventBridge<M> = {
 	/**

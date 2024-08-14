@@ -29,6 +29,7 @@ describe('AMQP Event Bridge Tests', () => {
 		workerId = `wrk_${randomBytes(2).toString('hex')}`
 		connections = []
 		publisher = await openConnection({
+			amqpUri: process.env.AMQP_URI!,
 			logger: LOGGER.child({ conn: 'publisher' }),
 		})
 	})
@@ -121,10 +122,10 @@ describe('AMQP Event Bridge Tests', () => {
 
 	it('should expire message after ttl', async() => {
 		const ttlSeconds = 1
-		publisher = await openConnection({
-			logger: LOGGER.child({ conn: 'publisher' }),
-			events: ['my-cool-event'],
-			workerId,
+		let conn = await openConnection({
+			onEvent: async() => {
+				recvCount += 1
+			},
 			queueConfig: {
 				delayedRetrySeconds: 0,
 				options: {
@@ -132,6 +133,7 @@ describe('AMQP Event Bridge Tests', () => {
 				}
 			},
 		})
+		await conn.close()
 
 		publisher.publish('my-cool-event', { value: 10 }, '123')
 		await publisher.flush()
@@ -139,10 +141,16 @@ describe('AMQP Event Bridge Tests', () => {
 		await delay(ttlSeconds + 50)
 
 		let recvCount = 0
-		await openConnection({
+		conn = await openConnection({
 			onEvent: async() => {
 				recvCount += 1
-			}
+			},
+			queueConfig: {
+				delayedRetrySeconds: 0,
+				options: {
+					messageTtl: ttlSeconds,
+				}
+			},
 		})
 
 		await delay(100)
@@ -384,23 +392,29 @@ describe('AMQP Event Bridge Tests', () => {
 	async function openConnection(
 		opts: Partial<AMQPEventBridgeOptions<TestEventMap>>,
 	) {
+		if('onEvent' in opts) {
+			opts = {
+				workerId,
+				events: ['my-cool-event', 'another-cool-event'],
+				...opts,
+				queueConfig: {
+					maxInitialRetries: MAX_MESSAGE_RETRIES,
+					delayedRetrySeconds: DELAY_RETRY_S,
+					maxDelayedRetries: MAX_DELAYED_RETRIES,
+					...opts.queueConfig,
+				},
+			}
+		}
+
 		const conn = makeAmqpEventBridge({
 			amqpUri: process.env.AMQP_URI!,
 			maxMessagesPerWorker: MAX_MESSAGES_PER_WORKER,
 			logger: LOGGER,
-			workerId,
-			events: ['my-cool-event', 'another-cool-event'],
 			batcherConfig: {
 				maxEventsForFlush: MAX_MSGS_BEFORE_FLUSH,
 				eventsPushIntervalMs: EVENT_FLUSH_INTERVAL_MS
 			},
 			...opts,
-			queueConfig: {
-				maxInitialRetries: MAX_MESSAGE_RETRIES,
-				delayedRetrySeconds: DELAY_RETRY_S,
-				maxDelayedRetries: MAX_DELAYED_RETRIES,
-				...opts.queueConfig,
-			},
 		})
 
 		connections.push(conn)
