@@ -28,7 +28,7 @@ type PendingPublishMap<M> = { [key: string]: PendingPublish<M, keyof M> }
  *
  * @param options config options
  */
-export default function makeEventBatcher<M>({
+export function makeEventBatcher<M>({
 	publish, logger,
 	eventsPushIntervalMs,
 	maxEventsForFlush
