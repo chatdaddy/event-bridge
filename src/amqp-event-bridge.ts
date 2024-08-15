@@ -46,7 +46,7 @@ export function makeAmqpEventBridge<M>(
 	type E = keyof M
 
 	const {
-		workerId = '',
+		queueName = '',
 		events = [],
 		onEvent,
 		maxMessagesPerWorker,
@@ -61,9 +61,9 @@ export function makeAmqpEventBridge<M>(
 	const { encode, decode } = serializer || V8Serializer
 	const exchangesAsserted = new Set<string>()
 
-	const dlxExchangeName = `${workerId}_dlx`
-	const dlxExchangeBackToQueue = `${workerId}_dlx_back_to_queue`
-	const dlxQueueName = `${workerId}_dlx_queue`
+	const dlxExchangeName = `${queueName}_dlx`
+	const dlxExchangeBackToQueue = `${queueName}_dlx_back_to_queue`
+	const dlxQueueName = `${queueName}_dlx_queue`
 
 	const batcher = makeEventBatcher<M>({
 		publish,
@@ -127,7 +127,7 @@ export function makeAmqpEventBridge<M>(
 		logger.info('opened channel')
 		opened = true
 
-		if(!workerId) {
+		if(!queueName) {
 			return
 		}
 
@@ -136,7 +136,7 @@ export function makeAmqpEventBridge<M>(
 
 	async function startSubscription(channel: ConfirmChannel) {
 		await channel.assertQueue(
-			workerId,
+			queueName,
 			{
 				...DEFAULT_QUEUE_OPTIONS,
 				...queueOptions,
@@ -151,21 +151,21 @@ export function makeAmqpEventBridge<M>(
 			}
 		)
 
-		logger.debug({ workerId }, 'asserted queue')
+		logger.debug({ queueName }, 'asserted queue')
 
 		for(const event of events) {
 			const exchange = String(event)
 			await assertExchangeIfRequired(exchange, channel)
-			await channel.bindQueue(workerId, exchange, '*')
+			await channel.bindQueue(queueName, exchange, '*')
 		}
 
-		logger.debug({ workerId, events }, 'bound queue to exchanges')
+		logger.debug({ queueName, events }, 'bound queue to exchanges')
 
 		await setupDelayedRetry(channel)
 
 		// start the subscription
 		const { consumerTag } = await channel.consume(
-			workerId,
+			queueName,
 			consumerHandler,
 			{ noAck: false }
 		)
@@ -190,7 +190,7 @@ export function makeAmqpEventBridge<M>(
 			}
 		)
 		await channel.bindQueue(dlxQueueName, dlxExchangeName, '')
-		await channel.bindQueue(workerId, dlxExchangeBackToQueue, '')
+		await channel.bindQueue(queueName, dlxExchangeBackToQueue, '')
 
 		logger.info(
 			{

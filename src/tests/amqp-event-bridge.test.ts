@@ -21,12 +21,12 @@ const LOGGER = P({ level: 'trace' })
 
 describe('AMQP Event Bridge Tests', () => {
 
-	let workerId: string
+	let queueName: string
 	let connections: AMQPEventBridge<TestEventMap>[] = []
 	let publisher: AMQPEventBridge<TestEventMap>
 
 	beforeEach(async() => {
-		workerId = `wrk_${randomBytes(2).toString('hex')}`
+		queueName = `wrk_${randomBytes(2).toString('hex')}`
 		connections = []
 		publisher = await openConnection({
 			amqpUri: process.env.AMQP_URI!,
@@ -40,7 +40,7 @@ describe('AMQP Event Bridge Tests', () => {
 
 	it('should not be consuming events before subscription', async() => {
 		const queue = await publisher.__internal.channel
-			.checkQueue(workerId)
+			.checkQueue(queueName)
 			.catch(() => undefined)
 		expect(queue?.consumerCount).toBeFalsy()
 	})
@@ -394,7 +394,7 @@ describe('AMQP Event Bridge Tests', () => {
 	) {
 		if('onEvent' in opts) {
 			opts = {
-				workerId,
+				queueName,
 				events: ['my-cool-event', 'another-cool-event'],
 				...opts,
 				queueConfig: {

@@ -66,11 +66,10 @@ type AMQPBaseOptions<M> = {
 
 export type AMQPSubscriberOptions<M> = AMQPBaseOptions<M> & {
 	/**
-	 * Worker group ID -- all workers with the same
-	 * workerId will share the same queue.
-	 * Queue will only be setup if onEvent is provided
+	 * Queue name to process events. Will be automatically created
+	 * if it doesn't exist w the provided options.
 	 */
-	workerId: string
+	queueName: string
 	/**
 	 * Events the worker shall listen for
 	 */
