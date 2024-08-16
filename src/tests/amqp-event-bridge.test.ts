@@ -389,6 +389,53 @@ describe('AMQP Event Bridge Tests', () => {
 		expect(dataRecv).toEqual(eventCount)
 	})
 
+	// we want to ensure that whenever a connection is closed
+	// all events being processed right now are allowed to finish
+	// and no new events are processed
+	it('should gracefully handle close', async() => {
+		const msgIdsHandled = new Set<string>()
+		const conn = await openConnection({
+			logger: LOGGER.child({ conn: 'close-test' }),
+			onEvent: async({ msgId }) => {
+				msgIdsHandled.add(msgId)
+				await delay(600)
+			}
+		})
+
+		for(let i = 0;i < 5;i++) {
+			publisher.publish('my-cool-event', { value: i }, i.toString())
+		}
+
+		await publisher.flush()
+		await Promise.all([
+			conn.close(),
+			// while the connection is closing -- keep firing
+			// events to ensure they are not processed -- or at least
+			// gracefully handled
+			(async() => {
+				for(let i = 0;i < 5;i++) {
+					publisher.publish('my-cool-event', { value: i }, i.toString())
+					await publisher.flush()
+				}
+			})
+		])
+
+		const newMsgHandled = new Set<string>()
+		await openConnection({
+			onEvent: async({ msgId }) => {
+				newMsgHandled.add(msgId)
+			}
+		})
+		await delay(200)
+
+		expect(msgIdsHandled.size).toBeGreaterThan(0)
+
+		// ensure no duplicate messages are received
+		for(const msgId of newMsgHandled) {
+			expect(msgIdsHandled).not.toContain(msgId)
+		}
+	})
+
 	async function openConnection(
 		opts: Partial<AMQPEventBridgeOptions<TestEventMap>>,
 	) {

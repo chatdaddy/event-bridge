@@ -77,6 +77,7 @@ export function makeAmqpEventBridge<M>(
 
 	let opened = false
 	let listenerTag: string | undefined
+	let msgsBeingProcessed = 0
 
 	channel.on('error', err => {
 		logger.error({ err }, 'error in channel')
@@ -100,16 +101,23 @@ export function makeAmqpEventBridge<M>(
 			try {
 				if(listenerTag) {
 					await channel.cancel(listenerTag)
+					logger.debug({ listenerTag }, 'cancelled listener')
 					listenerTag = undefined
+
+					while(msgsBeingProcessed > 0) {
+						await new Promise(r => setTimeout(r, 100))
+					}
+
+					logger.debug('all msgs drained')
 				}
 
 				await channel.close()
 				await conn.close()
-			} catch(error) {
 
+				logger.info('closed event-bridge')
+			} catch(err) {
+				logger.error({ err }, 'error in closing event-bridge')
 			}
-
-			logger.info('closed')
 		},
 	}
 
@@ -127,7 +135,7 @@ export function makeAmqpEventBridge<M>(
 		logger.info('opened channel')
 		opened = true
 
-		if(!queueName) {
+		if(!queueName || !onEvent) {
 			return
 		}
 
@@ -224,6 +232,7 @@ export function makeAmqpEventBridge<M>(
 
 		let data: any
 		try {
+			msgsBeingProcessed += 1
 			data = decode(msg.content, exchange)
 
 			const parsed = parseMessageId(msgId)
@@ -262,6 +271,8 @@ export function makeAmqpEventBridge<M>(
 				: 'error in handling msg. Will retry later.'
 			_logger.error({ retryNow, err }, errMsg)
 			channel.nack(msg, undefined, retryNow)
+		} finally {
+			msgsBeingProcessed -= 1
 		}
 	}
 
