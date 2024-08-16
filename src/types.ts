@@ -130,8 +130,8 @@ export type AMQPEventBridge<M> = {
     close(): Promise<void>
     publish<E extends keyof M>(
 		event: E,
+		ownerId: string,
 		data: M[E],
-		ownerId: string
 	): void
 	/**
 	 * Flushes all pending events

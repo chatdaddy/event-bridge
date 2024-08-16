@@ -69,7 +69,7 @@ describe('AMQP Event Bridge Tests', () => {
 			)
 		)
 
-		publisher.publish(expectedEvent, { value: 10 }, expectedOwnerId)
+		publisher.publish(expectedEvent, expectedOwnerId, { value: 10 })
 		await publisher.flush()
 
 		await delay(200)
@@ -91,8 +91,8 @@ describe('AMQP Event Bridge Tests', () => {
 			}
 		})
 
-		publisher.publish(expectedEvent, { value: 1 }, expectedOwnerId)
-		publisher.publish(expectedEvent, { value: 2 }, '')
+		publisher.publish(expectedEvent, expectedOwnerId, { value: 1 })
+		publisher.publish(expectedEvent, '', { value: 2 })
 		await delay(500)
 		expect(recvCount).toBe(1)
 	})
@@ -107,7 +107,7 @@ describe('AMQP Event Bridge Tests', () => {
 		})
 		await conn.close()
 
-		publisher.publish('my-cool-event', { value: 10 }, '123')
+		publisher.publish('my-cool-event', '123', { value: 10 })
 		await publisher.flush()
 
 		await openConnection({
@@ -135,7 +135,7 @@ describe('AMQP Event Bridge Tests', () => {
 		})
 		await conn.close()
 
-		publisher.publish('my-cool-event', { value: 10 }, '123')
+		publisher.publish('my-cool-event', '123', { value: 10 })
 		await publisher.flush()
 
 		await delay(ttlSeconds + 50)
@@ -177,7 +177,7 @@ describe('AMQP Event Bridge Tests', () => {
 			throw new Error('Test error')
 		})
 
-		publisher.publish(event, { value: 10 }, ownerId)
+		publisher.publish(event, ownerId, { value: 10 })
 		await publisher.flush()
 
 		expect(recvCount).toBe(0)
@@ -205,7 +205,7 @@ describe('AMQP Event Bridge Tests', () => {
 		const rawConn = conn.__internal.channel['_connectionManager']
 		rawConn.reconnect()
 
-		publisher.publish('my-cool-event', { value: 10 }, '123')
+		publisher.publish('my-cool-event', '123', { value: 10 })
 		await publisher.flush()
 
 		await delay(100)
@@ -224,7 +224,7 @@ describe('AMQP Event Bridge Tests', () => {
 			}
 		})
 
-		publisher.publish('my-cool-event', { value: 10 }, '123')
+		publisher.publish('my-cool-event', '123', { value: 10 })
 		await publisher.flush()
 
 		await delay(100)
@@ -243,7 +243,7 @@ describe('AMQP Event Bridge Tests', () => {
 			}
 		})
 
-		publisher.publish('my-cool-event', { value: 10 }, '123')
+		publisher.publish('my-cool-event', '123', { value: 10 })
 		await publisher.flush()
 
 		await delay(200)
@@ -261,7 +261,7 @@ describe('AMQP Event Bridge Tests', () => {
 			},
 		})
 
-		publisher.publish('my-cool-event', { value: 10 }, expOwnerId)
+		publisher.publish('my-cool-event', expOwnerId, { value: 10 })
 		await publisher.flush()
 
 		await delay(200)
@@ -301,8 +301,8 @@ describe('AMQP Event Bridge Tests', () => {
 		for(let i = 0;i < total;i++) {
 			publisher.publish(
 				'my-cool-event',
+				i.toString(),
 				{ value: 10 },
-				i.toString()
 			)
 		}
 
@@ -328,8 +328,8 @@ describe('AMQP Event Bridge Tests', () => {
 			}
 		})
 
-		publisher.publish('my-cool-event', { value: 10 }, expectedOwnerId)
-		publisher.publish('another-cool-event', { text: '123' }, expectedOwnerId)
+		publisher.publish('my-cool-event', expectedOwnerId, { value: 10 })
+		publisher.publish('another-cool-event', expectedOwnerId, { text: '123' })
 		await publisher.flush()
 
 		await delay(200)
@@ -351,7 +351,7 @@ describe('AMQP Event Bridge Tests', () => {
 		})
 
 		for(let i = 0;i < eventCount;i++) {
-			publisher.publish('another-cool-event', { text: 'abc ' + i }, expectedOwnerId)
+			publisher.publish('another-cool-event', expectedOwnerId, { text: 'abc ' + i })
 		}
 
 		await publisher.flush()
@@ -380,8 +380,8 @@ describe('AMQP Event Bridge Tests', () => {
 		for(let i = 0;i < eventCount;i++) {
 			publisher.publish(
 				'another-cool-event',
-				{ text: 'abc ' + i },
-				expectedOwnerId
+				expectedOwnerId,
+				{ text: 'abc ' + i }
 			)
 		}
 
@@ -403,7 +403,7 @@ describe('AMQP Event Bridge Tests', () => {
 		})
 
 		for(let i = 0;i < 5;i++) {
-			publisher.publish('my-cool-event', { value: i }, i.toString())
+			publisher.publish('my-cool-event', i.toString(), { value: i })
 		}
 
 		await publisher.flush()
@@ -414,7 +414,7 @@ describe('AMQP Event Bridge Tests', () => {
 			// gracefully handled
 			(async() => {
 				for(let i = 0;i < 5;i++) {
-					publisher.publish('my-cool-event', { value: i }, i.toString())
+					publisher.publish('my-cool-event', i.toString(), { value: i })
 					await publisher.flush()
 				}
 			})

@@ -55,8 +55,8 @@ export function makeEventBatcher<M>({
 		 * */
 		publish<Event extends keyof M>(
 			event: Event,
+			ownerId: string,
 			data: M[Event],
-			ownerId: string
 		) {
 			let map = events[event]
 			if(!events[event]) {
