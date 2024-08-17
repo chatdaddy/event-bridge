@@ -140,5 +140,9 @@ export type AMQPEventBridge<M> = {
 
 	__internal: {
 		channel: ChannelWrapper
+		/**
+		 * Publishes the event immediately
+		 */
+		publishNow<E extends keyof M>(d: EventData<M, E>): Promise<void>
 	}
 }

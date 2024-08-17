@@ -91,7 +91,7 @@ export function makeAmqpEventBridge<M>(
 	})
 
 	return {
-		__internal: { channel },
+		__internal: { channel, publishNow: publish },
 		...batcher,
 		waitForOpen,
 		async close() {
