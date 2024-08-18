@@ -179,7 +179,10 @@ export function makeAmqpEventBridge<M>(
 		)
 
 		listenerTag = consumerTag
-		logger.debug({ consumerTag }, 'consuming events')
+		logger.info(
+			{ queueName, maxMessagesPerWorker, consumerTag },
+			'consuming events'
+		)
 	}
 
 	async function setupDelayedRetry(channel: ConfirmChannel) {
