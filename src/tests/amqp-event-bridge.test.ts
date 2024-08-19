@@ -366,11 +366,18 @@ describe('AMQP Event Bridge Tests', () => {
 		const expectedOwnerId = randomBytes(2).toString('hex')
 		const eventCount = MAX_MSGS_BEFORE_FLUSH + 1
 
+		let recvTooMany = false
+
 		let dataRecv = 0
 		await openConnection({
 			onEvent: async({ data, ownerId }) => {
 				if(ownerId !== expectedOwnerId) {
 					return
+				}
+
+				if(data.length > MAX_MSGS_BEFORE_FLUSH) {
+					console.log('Received too many events', data.length, MAX_MSGS_BEFORE_FLUSH)
+					recvTooMany = true
 				}
 
 				dataRecv += data.length
@@ -385,8 +392,9 @@ describe('AMQP Event Bridge Tests', () => {
 			)
 		}
 
-		await delay(200)
+		await delay(500)
 		expect(dataRecv).toEqual(eventCount)
+		expect(recvTooMany).toBe(false)
 	})
 
 	// we want to ensure that whenever a connection is closed
@@ -397,7 +405,7 @@ describe('AMQP Event Bridge Tests', () => {
 		const conn = await openConnection({
 			logger: LOGGER.child({ conn: 'close-test' }),
 			onEvent: async({ msgId }) => {
-				msgIdsHandled.add(msgId)
+				msgIdsHandled.add(msgId!)
 				await delay(600)
 			}
 		})
@@ -423,7 +431,7 @@ describe('AMQP Event Bridge Tests', () => {
 		const newMsgHandled = new Set<string>()
 		await openConnection({
 			onEvent: async({ msgId }) => {
-				newMsgHandled.add(msgId)
+				newMsgHandled.add(msgId!)
 			}
 		})
 		await delay(200)

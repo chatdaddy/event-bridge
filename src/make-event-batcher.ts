@@ -73,7 +73,7 @@ export function makeEventBatcher<M>({
 
 			startTimeout()
 
-			if(pendingEventCount > maxEventsForFlush) {
+			if(pendingEventCount >= maxEventsForFlush) {
 				flush()
 			}
 		},
@@ -81,14 +81,8 @@ export function makeEventBatcher<M>({
 	}
 
 	/** push out all pending events */
-	async function flush() {
-		await flushFailedMessages()
-
-		if(!pendingEventCount) {
-			return
-		}
-
-		logger.debug('flushing events...')
+	function flush() {
+		logger.debug({ pendingEventCount }, 'flushing events...')
 
 		const eventCountToFlush = pendingEventCount
 		const pendingPublishes: PendingPublishMap<M> = { }
@@ -111,10 +105,20 @@ export function makeEventBatcher<M>({
 		clearTimeout(timeout)
 		timeout = undefined
 
-		const failed = await publishBatch(pendingPublishes)
+		return postFlush(eventCountToFlush, pendingPublishes)
+	}
+
+	async function postFlush(eventCount: number, batch: PendingPublishMap<M>) {
+		await flushFailedMessages()
+
+		if(!eventCount) {
+			return
+		}
+
+		const failed = await publishBatch(batch)
 		logger.debug(
 			{
-				total: eventCountToFlush,
+				total: eventCount,
 				failed: Object.values(failed).length
 			},
 			'flushed events'
