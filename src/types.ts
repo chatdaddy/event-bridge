@@ -37,14 +37,17 @@ type DataWEvent<M> = {
 	}
 }
 
-type SubscriptionData<M, T extends keyof M> = {
+export type EventSubscriptionData<M, T extends keyof M> = {
 	ownerId?: string
-	msgId: string
+	/**
+	 * Message ID of this event
+	 */
+	msgId?: string
 	logger: Logger
 } & DataWEvent<M>[T]
 
 export type EventSubscriptionListener<M, T extends keyof M> = (
-	data: SubscriptionData<M, T>
+	data: EventSubscriptionData<M, T>
 ) => Promise<void> | void
 
 type AMQPBaseOptions<M> = {
