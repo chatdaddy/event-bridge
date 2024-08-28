@@ -77,6 +77,48 @@ describe('AMQP Event Bridge Tests', () => {
 		expect(recvCount).toBe(1)
 	})
 
+	it('should open multiple queues', async() => {
+
+		let q1Recv = 0
+		let q2Recv = 0
+		const subs = await openConnection({
+			subscriptions: [
+				{
+					queueName: queueName,
+					events: ['my-cool-event'],
+					onEvent: async() => {
+						q1Recv += 1
+					}
+				},
+				{
+					queueName: queueName + '-2',
+					events: ['another-cool-event'],
+					onEvent: async() => {
+						q2Recv += 1
+					}
+				}
+			]
+		})
+
+		expect(subs.__internal.subscriptions).toHaveLength(2)
+
+		publisher.publish('my-cool-event', '123', { value: 10 })
+		await publisher.flush()
+
+		await delay(50)
+
+		expect(q1Recv).toBe(1)
+		expect(q2Recv).toBe(0)
+
+		publisher.publish('another-cool-event', '123', { text: '123' })
+		await publisher.flush()
+
+		await delay(50)
+
+		expect(q1Recv).toBe(1)
+		expect(q2Recv).toBe(1)
+	})
+
 	it('should automatically publish once interval is reached', async() => {
 		let recvCount = 0
 
@@ -458,6 +500,15 @@ describe('AMQP Event Bridge Tests', () => {
 					maxDelayedRetries: MAX_DELAYED_RETRIES,
 					...opts.queueConfig,
 				},
+			}
+		} else if('subscriptions' in opts && opts.subscriptions) {
+			for(const sub of opts.subscriptions) {
+				sub.queueConfig = {
+					maxInitialRetries: MAX_MESSAGE_RETRIES,
+					delayedRetrySeconds: DELAY_RETRY_S,
+					maxDelayedRetries: MAX_DELAYED_RETRIES,
+					...sub.queueConfig,
+				}
 			}
 		}
 
