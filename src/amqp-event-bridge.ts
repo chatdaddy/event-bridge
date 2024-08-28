@@ -1,10 +1,12 @@
-import AMQP, { ChannelWrapper, Options } from 'amqp-connection-manager'
-import { PublishOptions } from 'amqp-connection-manager/dist/types/ChannelWrapper'
+import type { ChannelWrapper, Options } from 'amqp-connection-manager'
+import AMQP from 'amqp-connection-manager'
+import type { IAmqpConnectionManager } from 'amqp-connection-manager/dist/types/AmqpConnectionManager'
+import type { PublishOptions } from 'amqp-connection-manager/dist/types/ChannelWrapper'
 import type { ConfirmChannel, ConsumeMessage } from 'amqplib'
-import P from 'pino'
+import P, { type Logger } from 'pino'
 import { makeEventBatcher } from './make-event-batcher'
 import { V8Serializer } from './serializer'
-import { AMQPEventBridge, AMQPEventBridgeOptions, AMQPSubscriberOptions, EventData } from './types'
+import type { AMQPEventBridge, AMQPEventBridgeOptions, AMQPSubscription, EventData, OpenSubscription, Serializer } from './types'
 import { makeUqMessageId, parseMessageId } from './utils'
 
 const DEFAULT_PUBLISH_OPTIONS: PublishOptions = {
@@ -33,37 +35,28 @@ const DEFAULT_MSGS_TO_FLUSH = 250
 
 const DEFAULT_RETRY_DELAY_S = 60 * 60 // 1h
 
+const DEFAULT_MAX_MSGS_PER_WORKER = 10
+
 export function makeAmqpEventBridge<M>(
 	{
 		amqpUri,
 		logger = P(),
-		serializer,
+		serializer = V8Serializer,
 		publishOptions,
 		batcherConfig,
 		...rest
 	}: AMQPEventBridgeOptions<M>
 ): AMQPEventBridge<M> {
 	type E = keyof M
+	const subscriptions: AMQPSubscription<M>[] = []
+	if('queueName' in rest && 'events' in rest) {
+		subscriptions.push(rest)
+	} else if('subscriptions' in rest) {
+		subscriptions.push(...rest.subscriptions as AMQPSubscription<M>[])
+	}
 
-	const {
-		queueName = '',
-		events = [],
-		onEvent,
-		maxMessagesPerWorker,
-		queueConfig: {
-			maxInitialRetries = 2,
-			delayedRetrySeconds = DEFAULT_RETRY_DELAY_S,
-			maxDelayedRetries = 3,
-			options: queueOptions = {}
-		} = {}
-	} = rest as Partial<AMQPSubscriberOptions<M>>
-
-	const { encode, decode } = serializer || V8Serializer
+	const { encode } = serializer
 	const exchangesAsserted = new Set<string>()
-
-	const dlxExchangeName = `${queueName}_dlx`
-	const dlxExchangeBackToQueue = `${queueName}_dlx_back_to_queue`
-	const dlxQueueName = `${queueName}_dlx_queue`
 
 	const batcher = makeEventBatcher<M>({
 		publish,
@@ -73,31 +66,148 @@ export function makeAmqpEventBridge<M>(
 	})
 
 	const conn = AMQP.connect([amqpUri], { })
-	const channel = conn.createChannel({ setup: setupMain })
+	const openSubs = subscriptions.map(sub => (
+		openSubscription(sub, {
+			conn,
+			logger: subscriptions.length > 1
+				? logger.child({ queueName: sub.queueName })
+				: logger,
+			decode: serializer.decode,
+			assertExchangeIfRequired
+		})
+	))
+	const makeSeparatePublisher = !openSubs.length
+	const pubChannel = makeSeparatePublisher
+		? conn.createChannel({ name: 'publisher' })
+		: openSubs[0].channel
 
-	let opened = false
-	let listenerTag: string | undefined
-	let msgsBeingProcessed = 0
-
-	channel.on('error', err => {
-		logger.error({ err }, 'error in channel')
-	})
 	conn.on('disconnect', (arg) => {
 		logger.error({ err: arg.err }, 'error in connection')
-		opened = false
 	})
 	conn.on('connectFailed', (err) => {
 		logger.error({ err }, 'connect failed')
 	})
 
 	return {
-		__internal: { channel, publishNow: publish },
+		__internal: {
+			pubChannel,
+			subscriptions: openSubs,
+			publishNow: publish
+		},
 		...batcher,
 		waitForOpen,
 		async close() {
 			// flush any pending events
 			await batcher.flush()
 
+			for(const sub of openSubs) {
+				await sub.close()
+			}
+
+			if(makeSeparatePublisher) {
+				await pubChannel.close()
+			}
+
+			logger.info('closed event-bridge')
+		},
+	}
+
+	async function waitForOpen() {
+		await pubChannel.waitForConnect()
+	}
+
+	async function assertExchangeIfRequired(
+		exchangeName: string,
+		channel: ChannelWrapper | ConfirmChannel
+	) {
+		if(exchangesAsserted.has(exchangeName)) {
+			return
+		}
+
+		// topic exchanges so we can match on routing key
+		await channel.assertExchange(exchangeName, 'topic')
+		exchangesAsserted.add(exchangeName)
+	}
+
+	async function publish<Event extends E>({
+		event,
+		data,
+		ownerId,
+		messageId = makeUqMessageId()
+	}: EventData<M, Event>) {
+		await waitForOpen()
+		const exchange = event.toString()
+		await assertExchangeIfRequired(exchange, pubChannel)
+
+		await pubChannel.publish(
+			exchange,
+			ownerId,
+			encode(data, event),
+			{
+				messageId: messageId,
+				...DEFAULT_PUBLISH_OPTIONS,
+				...publishOptions,
+			}
+		)
+
+		logger.trace(
+			{ exchange, items: data.length, ownerId, messageId },
+			'published'
+		)
+	}
+}
+
+type SubscriptionCtx = {
+	conn: IAmqpConnectionManager
+	logger: Logger
+	decode: Serializer<any>['decode']
+	assertExchangeIfRequired(
+		exchangeName: string,
+		channel: ConfirmChannel
+	): Promise<void>
+}
+
+function openSubscription<M>(
+	{
+		queueName = '',
+		events = [],
+		onEvent,
+		maxMessagesPerWorker = DEFAULT_MAX_MSGS_PER_WORKER,
+		queueConfig: {
+			maxInitialRetries = 2,
+			delayedRetrySeconds = DEFAULT_RETRY_DELAY_S,
+			maxDelayedRetries = 3,
+			options: queueOptions = {}
+		} = {}
+	}: AMQPSubscription<M>,
+	{
+		conn,
+		logger,
+		decode,
+		assertExchangeIfRequired
+	}: SubscriptionCtx
+): OpenSubscription {
+	type E = keyof M
+
+	const dlxExchangeName = `${queueName}_dlx`
+	const dlxExchangeBackToQueue = `${queueName}_dlx_back_to_queue`
+	const dlxQueueName = `${queueName}_dlx_queue`
+
+	let listenerTag: string | undefined
+	let msgsBeingProcessed = 0
+
+	const channel = conn.createChannel({
+		name: `subscriber-${queueName}`,
+		setup: startSubscription
+	})
+
+	channel.on('error', err => {
+		logger.error({ err }, 'error in channel')
+	})
+
+	return {
+		channel,
+		async close() {
 			try {
 				if(listenerTag) {
 					await channel.cancel(listenerTag)
@@ -112,37 +222,19 @@ export function makeAmqpEventBridge<M>(
 				}
 
 				await channel.close()
-				await conn.close()
 
-				logger.info('closed event-bridge')
+				logger.info('closed subscription')
 			} catch(err) {
-				logger.error({ err }, 'error in closing event-bridge')
+				logger.error({ err }, 'error in closing subscription')
 			}
 		},
 	}
 
-	async function waitForOpen() {
-		if(!opened) {
-			await channel.waitForConnect()
-		}
-	}
-
-	async function setupMain(channel: ConfirmChannel) {
-		if(maxMessagesPerWorker) {
-			await channel.prefetch(maxMessagesPerWorker)
-		}
-
-		logger.info('opened channel')
-		opened = true
-
-		if(!queueName || !onEvent) {
-			return
-		}
-
-		await startSubscription(channel)
-	}
-
 	async function startSubscription(channel: ConfirmChannel) {
+		logger.info('starting subscription')
+
+		await channel.prefetch(maxMessagesPerWorker)
+
 		await channel.assertQueue(
 			queueName,
 			{
@@ -242,7 +334,7 @@ export function makeAmqpEventBridge<M>(
 
 			_logger.info({ eventTs: parsed?.dt, data }, 'handling msg')
 
-			await onEvent!({
+			await onEvent({
 				ownerId,
 				msgId,
 				logger: _logger,
@@ -250,10 +342,7 @@ export function makeAmqpEventBridge<M>(
 				event: exchange,
 			})
 
-			_logger.trace(
-				{ exchange, id: msgId, ownerId },
-				'handled msg'
-			)
+			_logger.info('handled msg')
 
 			channel.ack(msg)
 		} catch(err) {
@@ -277,45 +366,5 @@ export function makeAmqpEventBridge<M>(
 		} finally {
 			msgsBeingProcessed -= 1
 		}
-	}
-
-	async function assertExchangeIfRequired(
-		exchangeName: string,
-		channel: ChannelWrapper | ConfirmChannel
-	) {
-		if(exchangesAsserted.has(exchangeName)) {
-			return
-		}
-
-		// topic exchanges so we can match on routing key
-		await channel.assertExchange(exchangeName, 'topic')
-		exchangesAsserted.add(exchangeName)
-	}
-
-	async function publish<Event extends E>({
-		event,
-		data,
-		ownerId,
-		messageId = makeUqMessageId()
-	}: EventData<M, Event>) {
-		await waitForOpen()
-		const exchange = event.toString()
-		await assertExchangeIfRequired(exchange, channel)
-
-		await channel.publish(
-			exchange,
-			ownerId,
-			encode(data, event),
-			{
-				messageId: messageId,
-				...DEFAULT_PUBLISH_OPTIONS,
-				...publishOptions,
-			}
-		)
-
-		logger.trace(
-			{ exchange, items: data.length, ownerId, messageId },
-			'published'
-		)
 	}
 }

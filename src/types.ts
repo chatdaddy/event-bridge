@@ -67,7 +67,7 @@ type AMQPBaseOptions<M> = {
 	batcherConfig?: EventBatcherConfig
 }
 
-export type AMQPSubscriberOptions<M> = AMQPBaseOptions<M> & {
+export type AMQPSubscription<M> = {
 	/**
 	 * Queue name to process events. Will be automatically created
 	 * if it doesn't exist w the provided options.
@@ -122,8 +122,23 @@ export type AMQPSubscriberOptions<M> = AMQPBaseOptions<M> & {
 	}
 }
 
-export type AMQPEventBridgeOptions<M> = AMQPSubscriberOptions<M>
+export type AMQPMultiSubscriberOptions<M> = AMQPBaseOptions<M> & {
+	/**
+	 * Subscribers to create
+	 */
+	subscriptions: AMQPSubscription<M>[]
+}
+
+export type AMQPSingleSubscriberOptions<M> = AMQPBaseOptions<M> & AMQPSubscription<M>
+
+export type AMQPEventBridgeOptions<M> = AMQPMultiSubscriberOptions<M>
+	| AMQPSingleSubscriberOptions<M>
 	| AMQPBaseOptions<M>
+
+export type OpenSubscription = {
+	channel: ChannelWrapper
+	close(): Promise<void>
+}
 
 export type AMQPEventBridge<M> = {
 	/**
@@ -142,7 +157,8 @@ export type AMQPEventBridge<M> = {
     flush(): Promise<void>
 
 	__internal: {
-		channel: ChannelWrapper
+		pubChannel: ChannelWrapper
+		subscriptions: OpenSubscription[]
 		/**
 		 * Publishes the event immediately
 		 */

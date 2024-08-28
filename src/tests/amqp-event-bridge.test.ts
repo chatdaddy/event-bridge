@@ -39,7 +39,7 @@ describe('AMQP Event Bridge Tests', () => {
 	})
 
 	it('should not be consuming events before subscription', async() => {
-		const queue = await publisher.__internal.channel
+		const queue = await publisher.__internal.pubChannel
 			.checkQueue(queueName)
 			.catch(() => undefined)
 		expect(queue?.consumerCount).toBeFalsy()
@@ -171,7 +171,7 @@ describe('AMQP Event Bridge Tests', () => {
 			}
 		})
 
-		const channel = publisher.__internal.channel
+		const channel = publisher.__internal.pubChannel
 		const publishMock = jest.spyOn(channel, 'publish')
 		publishMock.mockImplementationOnce(() => {
 			throw new Error('Test error')
@@ -202,7 +202,7 @@ describe('AMQP Event Bridge Tests', () => {
 			}
 		})
 
-		const rawConn = conn.__internal.channel['_connectionManager']
+		const rawConn = conn.__internal.pubChannel['_connectionManager']
 		rawConn.reconnect()
 
 		publisher.publish('my-cool-event', '123', { value: 10 })
