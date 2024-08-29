@@ -17,6 +17,7 @@ const MAX_MESSAGE_RETRIES = 3
 const EVENT_FLUSH_INTERVAL_MS = 200
 const DELAY_RETRY_S = 2
 const MAX_DELAYED_RETRIES = 3
+const MAX_PUB_RETRIES = 3
 const LOGGER = P({ level: 'trace' })
 
 describe('AMQP Event Bridge Tests', () => {
@@ -234,6 +235,37 @@ describe('AMQP Event Bridge Tests', () => {
 			publishMock.mock.calls.map(c => c[3]?.messageId)
 		)
 		expect(msgIdSet.size).toBe(1)
+	})
+
+	it('should not exceed max retries', async() => {
+		const event: keyof TestEventMap = 'my-cool-event'
+		const ownerId = '123123123123'
+
+		let recvCount = 0
+
+		await openConnection({
+			onEvent: async({ ownerId: recvOwnerId }) => {
+				if(ownerId === recvOwnerId) {
+					recvCount += 1
+				}
+			}
+		})
+
+		const channel = publisher.__internal.pubChannel
+		const publishMock = jest.spyOn(channel, 'publish')
+		publishMock.mockImplementation(() => {
+			throw new Error('Test error')
+		})
+
+		publisher.publish(event, ownerId, { value: 10 })
+
+		for(let i = 0;i < MAX_PUB_RETRIES + 1;i++) {
+			await publisher.flush()
+		}
+
+		expect(recvCount).toBe(0)
+
+		expect(publishMock).toHaveBeenCalledTimes(MAX_PUB_RETRIES + 1)
 	})
 
 	it('should still listen after reconnection', async() => {

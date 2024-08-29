@@ -22,6 +22,11 @@ type EventBatcherConfig = {
 	eventsPushIntervalMs?: number
 	/** max events to take in before initiating a flush */
 	maxEventsForFlush: number
+	/**
+	 * Max number of retries for a message before
+	 * it's considered a failure
+	 */
+	maxRetries?: number
 }
 
 export type EventBatcherOptions<M> = EventBatcherConfig & {

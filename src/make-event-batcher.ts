@@ -31,7 +31,8 @@ type PendingPublishMap<M> = { [key: string]: PendingPublish<M, keyof M> }
 export function makeEventBatcher<M>({
 	publish, logger,
 	eventsPushIntervalMs,
-	maxEventsForFlush
+	maxEventsForFlush,
+	maxRetries = 3
 }: EventBatcherOptions<M>) {
 	logger = logger.child({ stream: 'events-manager' })
 
@@ -159,12 +160,20 @@ export function makeEventBatcher<M>({
 				delete map[id]
 			} catch(err) {
 				const { data, ...meta } = value
-				logger.error(
-					{ err, length: data.length, ...meta },
-					'error in publishing events'
-				)
 
-				value.tries += 1
+				if(value.tries >= maxRetries) {
+					logger.error(
+						{ err, ...value },
+						'failed to publish event after retries'
+					)
+				} else {
+					logger.error(
+						{ err, length: data.length, ...meta },
+						'error in publishing events'
+					)
+
+					value.tries += 1
+				}
 			}
 		}))
 
