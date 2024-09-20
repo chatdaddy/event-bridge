@@ -72,6 +72,13 @@ type AMQPBaseOptions<M> = {
 	batcherConfig?: EventBatcherConfig
 }
 
+type SendDirectOpts<M, T extends keyof M> = {
+	event: T
+	data: M[T][]
+	ownerId: string
+	queueName: string
+}
+
 export type AMQPSubscription<M> = {
 	/**
 	 * Queue name to process events. Will be automatically created
@@ -156,6 +163,10 @@ export type AMQPEventBridge<M> = {
 		ownerId: string,
 		data: M[E],
 	): void
+	/**
+	 * Sends a message directly to a queue
+	 */
+	sendDirect<E extends keyof M>(opts: SendDirectOpts<M, E>): void
 	/**
 	 * Flushes all pending events
 	 */

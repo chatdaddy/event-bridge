@@ -353,6 +353,38 @@ describe('AMQP Event Bridge Tests', () => {
 		expect(tries).toBe(MAX_MESSAGE_RETRIES + 1 + MAX_DELAYED_RETRIES)
 	}, 20_000)
 
+	it('should send direct to queue', async() => {
+		const event = 'my-cool-event'
+		const data = [{ value: 10 }, { value: 20 }]
+		const ownerId = '123'
+
+		let recvCount = 0
+
+		await Promise.all([
+			openConnection({
+				onEvent: async opts => {
+					expect(opts.event).toBe(event)
+					expect(opts.data).toEqual(data)
+					expect(opts.ownerId).toBe(ownerId)
+
+					recvCount += 1
+				}
+			}),
+			openConnection({
+				queueName: 'queue-2',
+				onEvent: async() => {
+					fail('Should not receive event')
+				}
+			})
+		])
+
+		await publisher.sendDirect({ event, data, ownerId, queueName })
+
+		await delay(50)
+
+		expect(recvCount).toBe(1)
+	})
+
 	it('should not receive more than expected concurrent events', async() => {
 		let concurrentHandling = 0
 		let eventsHandled = 0

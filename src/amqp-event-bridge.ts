@@ -17,6 +17,7 @@ const DEFAULT_PUBLISH_OPTIONS: PublishOptions = {
 }
 
 const EVENT_NAME_HEADER = 'x-event-name'
+const OWNER_ID_HEADER = 'x-owner-id'
 
 // six hours
 const MSG_TIMEOUT_MS = 6 * 60 * 60 * 1000
@@ -98,6 +99,27 @@ export function makeAmqpEventBridge<M>(
 		},
 		...batcher,
 		waitForOpen,
+		async sendDirect({ event, data, ownerId, queueName }) {
+			const eventStr = event.toString()
+			const messageId = makeUqMessageId()
+			await pubChannel.sendToQueue(
+				queueName,
+				encode(data, event),
+				{
+					...DEFAULT_PUBLISH_OPTIONS,
+					messageId,
+					headers: {
+						[EVENT_NAME_HEADER]: eventStr,
+						[OWNER_ID_HEADER]: ownerId,
+					}
+				}
+			)
+
+			logger.trace(
+				{ queueName, items: data.length, ownerId, messageId },
+				'sent to queue'
+			)
+		},
 		async close() {
 			// flush any pending events
 			await batcher.flush()
@@ -149,7 +171,10 @@ export function makeAmqpEventBridge<M>(
 				messageId: messageId,
 				...DEFAULT_PUBLISH_OPTIONS,
 				...publishOptions,
-				headers: { [EVENT_NAME_HEADER]: event }
+				headers: {
+					[EVENT_NAME_HEADER]: event,
+					[OWNER_ID_HEADER]: ownerId,
+				}
 			}
 		)
 
@@ -314,7 +339,8 @@ function openSubscription<M>(
 			|| msg.fields.exchange as E
 		const msgId = msg.properties.messageId
 		// owner ID is in the routing key
-		const ownerId = msg.fields.routingKey
+		const ownerId = msg.properties.headers?.[OWNER_ID_HEADER]
+			|| msg.fields.routingKey
 		const retryCount = +(
 			msg.properties.headers?.['x-delivery-count'] || 0
 		)
