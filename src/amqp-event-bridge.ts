@@ -16,6 +16,8 @@ const DEFAULT_PUBLISH_OPTIONS: PublishOptions = {
 	timeout: 3_000,
 }
 
+const EVENT_NAME_HEADER = 'x-event-name'
+
 // six hours
 const MSG_TIMEOUT_MS = 6 * 60 * 60 * 1000
 
@@ -147,6 +149,7 @@ export function makeAmqpEventBridge<M>(
 				messageId: messageId,
 				...DEFAULT_PUBLISH_OPTIONS,
 				...publishOptions,
+				headers: { [EVENT_NAME_HEADER]: event }
 			}
 		)
 
@@ -307,7 +310,8 @@ function openSubscription<M>(
 	}
 
 	async function consumerHandler(msg: ConsumeMessage) {
-		const exchange = msg.fields.exchange as E
+		const exchange = msg.properties.headers?.[EVENT_NAME_HEADER]
+			|| msg.fields.exchange as E
 		const msgId = msg.properties.messageId
 		// owner ID is in the routing key
 		const ownerId = msg.fields.routingKey

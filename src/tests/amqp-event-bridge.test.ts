@@ -328,8 +328,9 @@ describe('AMQP Event Bridge Tests', () => {
 		const expOwnerId = '123'
 		let tries = 0
 		await openConnection({
-			onEvent: async({ ownerId }) => {
+			onEvent: async({ ownerId, event }) => {
 				expect(ownerId).toBe(expOwnerId)
+				expect(event).toBe('my-cool-event')
 				tries += 1
 				throw new Error('Test error')
 			},
