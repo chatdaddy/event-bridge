@@ -153,9 +153,13 @@ const { msgId } = await bridge.sendDirect({
 await bridge.close();
 ```
 
-## How Delayed Retry Works
+## Delayed Retry
 
-#### Queue Reference
+We utilise a dead-letter exchange to handle delayed retries.
+
+---
+
+#### Queue and Exchange Definitions
 
 Supposting a queue `fun` with a `x-delivery-limit` of `N` (which means the message will be retried at most `N` times before being discarded)
 
@@ -166,7 +170,9 @@ Supposting a queue `fun` with a `x-delivery-limit` of `N` (which means the messa
 - `fun_dlx_back_to_queue`: Exchange where the message will be sent in case T milliseconds have passed.
 - `M`: Maximum number of delayed retries for a message (maxDelayedRetries).
 
-We utilise a dead-letter exchange to handle delayed retries. The process is as follows:
+---
+
+### How it works
 
 1. The `fun` queue has a retry limit (`x-delivery-limit`) of N and is configured with a dead-letter exchange (`fun_dlx`).
 2. When a message in `fun` fails to process N times, it is routed to the `fun_dlx` exchange.
