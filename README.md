@@ -159,7 +159,7 @@ We utilise a dead-letter exchange to handle delayed retries.
 
 ---
 
-#### Queue and Exchange Definitions
+#### Queue and Exchange Glossary
 
 Supposting a queue `fun` with a `x-delivery-limit` of `N` (which means the message will be retried at most `N` times before being discarded)
 
@@ -172,7 +172,7 @@ Supposting a queue `fun` with a `x-delivery-limit` of `N` (which means the messa
 
 ---
 
-### How it works
+#### How it works
 
 1. The `fun` queue has a retry limit (`x-delivery-limit`) of N and is configured with a dead-letter exchange (`fun_dlx`).
 2. When a message in `fun` fails to process N times, it is routed to the `fun_dlx` exchange.
