@@ -101,13 +101,13 @@ export function makeAmqpEventBridge<M>(
 		waitForOpen,
 		async sendDirect({ event, data, ownerId, queueName }) {
 			const eventStr = event.toString()
-			const messageId = makeUqMessageId()
+			const msgId = makeUqMessageId()
 			await pubChannel.sendToQueue(
 				queueName,
 				encode(data, event),
 				{
 					...DEFAULT_PUBLISH_OPTIONS,
-					messageId,
+					messageId: msgId,
 					headers: {
 						[EVENT_NAME_HEADER]: eventStr,
 						[OWNER_ID_HEADER]: ownerId,
@@ -116,9 +116,11 @@ export function makeAmqpEventBridge<M>(
 			)
 
 			logger.trace(
-				{ queueName, items: data.length, ownerId, messageId },
+				{ queueName, items: data.length, ownerId, msgId },
 				'sent to queue'
 			)
+
+			return { msgId }
 		},
 		async close() {
 			// flush any pending events

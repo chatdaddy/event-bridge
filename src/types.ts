@@ -166,7 +166,9 @@ export type AMQPEventBridge<M> = {
 	/**
 	 * Sends a message directly to a queue
 	 */
-	sendDirect<E extends keyof M>(opts: SendDirectOpts<M, E>): void
+	sendDirect<E extends keyof M>(
+		opts: SendDirectOpts<M, E>
+	): Promise<{ msgId: string }>
 	/**
 	 * Flushes all pending events
 	 */
