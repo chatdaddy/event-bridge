@@ -161,12 +161,12 @@ We utilise a dead-letter exchange to handle delayed retries.
 
 #### Queue and Exchange Glossary
 
-Supposing a queue `fun` with a `x-delivery-limit` of `N` (which means the message will be retried at most `N` times before being discarded)
+Supposing a queue `fun` with a `x-delivery-limit` of `N` (which means the message will be retried at most `N` times before being discarded). It has an argument `x-dead-letter-exchange` argument that points to the exchange where failed messages are routed after `N` retries
 
 - `fun_dlx`: Dead-letter exchange for the `fun` queue, where failed messages are routed after `N` retries. It's exclusive to the `fun` queue
-- `fun_dlx_queue`: Queue bound to `fun_dlx` with a `x-message-ttl` of `T` milliseconds. Has an argument `x-dead-letter-exchange`
+- `fun_dlx_queue`: Queue bound to `fun_dlx` with a `x-message-ttl` of `T` milliseconds. Has an argument `x-dead-letter-exchange` points to exchange where failed messages are sent
 - `x-message-ttl`: Time-to-live (`T` milliseconds) for messages in `fun_dlx_queue`
-- `x-dead-letter-exchange`: Argument that points to exchange where failed messages are sent in case `T` milliseconds have passed
+- `x-dead-letter-exchange`: Argument that points to exchange where failed messages are sent
 - `fun_dlx_back_to_queue`: Exchange where the message will be sent from `fun_dlx_queue` in case `T` milliseconds have passed
 - `M`: Maximum number of delayed retries for a message (maxDelayedRetries)
 
@@ -177,6 +177,6 @@ Supposing a queue `fun` with a `x-delivery-limit` of `N` (which means the messag
 1. The `fun` queue has a retry limit (`x-delivery-limit`) of `N` and is configured with a dead-letter exchange (`fun_dlx`)
 2. When a message in `fun` fails to process `N` times, it is routed to the `fun_dlx` exchange
 3. The `fun_dlx_queue` is bound to `fun_dlx` and holds failed messages for `T` milliseconds (`x-message-ttl`) before being discarded or pushed to another exchange if a `x-dead-letter-exchange` argument is provided
-4. After `T` milliseconds, messages are pushed from `fun_dlx_queue` to the `fun_dlx_back_to_queue` exchange
+4. In case `T` milliseconds have passed, messages are pushed from `fun_dlx_queue` to the `fun_dlx_back_to_queue` exchange (specified by `x-dead-letter-exchange` argument of `fun_dlx_queue`)
 5. Messages in `fun_dlx_back_to_queue` are requeued back to the `fun` queue
 6. If a message fails again after being requeued, it can be requeued up to M times (`maxDelayedRetries`)
