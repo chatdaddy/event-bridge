@@ -109,6 +109,7 @@ export function makeAmqpEventBridge<M>(
 				encode(data, event),
 				{
 					...DEFAULT_PUBLISH_OPTIONS,
+					...publishOptions,
 					messageId: msgId,
 					headers: {
 						[EVENT_NAME_HEADER]: eventStr,
