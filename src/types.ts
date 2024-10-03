@@ -70,6 +70,11 @@ type AMQPBaseOptions<M> = {
 	logger?: Logger
 
 	batcherConfig?: EventBatcherConfig
+	/**
+	 * Maximum size of the array to log, before truncating
+	 * @default 50
+	 */
+	maxItemsToLog?: number
 }
 
 type SendDirectOpts<M, T extends keyof M> = {

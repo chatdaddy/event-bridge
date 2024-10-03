@@ -47,6 +47,7 @@ export function makeAmqpEventBridge<M>(
 		serializer = V8Serializer,
 		publishOptions,
 		batcherConfig,
+		maxItemsToLog = 50,
 		...rest
 	}: AMQPEventBridgeOptions<M>
 ): AMQPEventBridge<M> {
@@ -72,11 +73,12 @@ export function makeAmqpEventBridge<M>(
 	const openSubs = subscriptions.map(sub => (
 		openSubscription(sub, {
 			conn,
+			maxItemsToLog,
 			logger: subscriptions.length > 1
 				? logger.child({ queueName: sub.queueName })
 				: logger,
 			decode: serializer.decode,
-			assertExchangeIfRequired
+			assertExchangeIfRequired,
 		})
 	))
 	const makeSeparatePublisher = !openSubs.length
@@ -195,6 +197,7 @@ type SubscriptionCtx = {
 		exchangeName: string,
 		channel: ConfirmChannel
 	): Promise<void>
+	maxItemsToLog: number
 }
 
 function openSubscription<M>(
@@ -214,7 +217,8 @@ function openSubscription<M>(
 		conn,
 		logger,
 		decode,
-		assertExchangeIfRequired
+		assertExchangeIfRequired,
+		maxItemsToLog
 	}: SubscriptionCtx
 ): OpenSubscription {
 	type E = keyof M
@@ -308,7 +312,7 @@ function openSubscription<M>(
 	}
 
 	async function setupDelayedRetry(channel: ConfirmChannel) {
-		if(!delayedRetrySeconds) {
+		if(!delayedRetrySeconds || !maxDelayedRetries) {
 			return
 		}
 
@@ -364,7 +368,14 @@ function openSubscription<M>(
 
 			const parsed = parseMessageId(msgId)
 
-			_logger.info({ eventTs: parsed?.dt, data }, 'handling msg')
+			_logger.info(
+				{
+					eventTs: parsed?.dt,
+					data: data.slice(0, maxItemsToLog),
+					totalItems: data.length,
+				},
+				'handling msg'
+			)
 
 			await onEvent({
 				ownerId,
