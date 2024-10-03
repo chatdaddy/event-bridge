@@ -130,6 +130,8 @@ const bridge = makeAmqpEventBridge<EventMap>({
 });
 ```
 
+As you can see, since `subscriptions` is an array, you can have multiple subscriptions, each with their own queue name, event handlers, and queue configurations.
+
 ### Publishing Directly to a Queue
 
 Sometimes you might want to publish an event directly to a queue, without any batching or to another exchange. You can do so using the `sendDirect` method.
