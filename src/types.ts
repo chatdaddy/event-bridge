@@ -100,7 +100,8 @@ export type AMQPSubscription<M> = {
 	onEvent: EventSubscriptionListener<M, keyof M>
 	/**
 	 * Maximum number of messages this worker shall
-	 * handle simultaneously
+	 * handle simultaneously.
+	 * Set to 0 to disable the subscription.
 	 * @default 1
 	 */
 	maxMessagesPerWorker?: number

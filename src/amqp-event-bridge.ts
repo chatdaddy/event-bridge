@@ -70,17 +70,24 @@ export function makeAmqpEventBridge<M>(
 	})
 
 	const conn = AMQP.connect([amqpUri], { })
-	const openSubs = subscriptions.map(sub => (
-		openSubscription(sub, {
-			conn,
-			maxItemsToLog,
-			logger: subscriptions.length > 1
-				? logger.child({ queueName: sub.queueName })
-				: logger,
-			decode: serializer.decode,
-			assertExchangeIfRequired,
-		})
-	))
+	const openSubs = subscriptions
+		// only open subscriptions that have a maxMessagesPerWorker
+		// that is not 0
+		.filter(sub => (
+			typeof sub.maxMessagesPerWorker === 'undefined'
+			|| sub.maxMessagesPerWorker > 0
+		))
+		.map(sub => (
+			openSubscription(sub, {
+				conn,
+				maxItemsToLog,
+				logger: subscriptions.length > 1
+					? logger.child({ queueName: sub.queueName })
+					: logger,
+				decode: serializer.decode,
+				assertExchangeIfRequired,
+			})
+		))
 	const makeSeparatePublisher = !openSubs.length
 	const pubChannel = makeSeparatePublisher
 		? conn.createChannel({ name: 'publisher' })
