@@ -94,10 +94,21 @@ export function makeAmqpEventBridge<M>(
 		: openSubs[0].channel
 
 	conn.on('disconnect', (arg) => {
-		logger.error({ err: arg.err }, 'error in connection')
+		logger.error({ err: arg.err }, 'error in AMQP connection')
 	})
 	conn.on('connectFailed', (err) => {
-		logger.error({ err }, 'connect failed')
+		logger.error({ err }, 'AMQP connect failed')
+	})
+	conn.on('connect', () => {
+		logger.info('connected to AMQP')
+	})
+
+	conn.on('blocked', reason => {
+		logger.warn({ reason }, 'AMQP connection blocked')
+	})
+
+	conn.on('unblocked', () => {
+		logger.info('AMQP connection unblocked')
 	})
 
 	return {
@@ -245,6 +256,10 @@ function openSubscription<M>(
 
 	channel.on('error', err => {
 		logger.error({ err }, 'error in channel')
+	})
+
+	channel.on('close', () => {
+		logger.info('channel closed')
 	})
 
 	return {
