@@ -12,8 +12,6 @@ import { makeUqMessageId, parseMessageId } from './utils'
 const DEFAULT_PUBLISH_OPTIONS: PublishOptions = {
 	contentType: 'application/octet-stream',
 	persistent: true,
-	// 3s timeout
-	timeout: 3_000,
 }
 
 const EVENT_NAME_HEADER = 'x-event-name'

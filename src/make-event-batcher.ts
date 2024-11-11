@@ -154,21 +154,21 @@ export function makeEventBatcher<M>({
 	 * @returns map of failed publishes
 	 */
 	async function publishBatch(map: PendingPublishMap<M>) {
-		await Promise.all(Object.entries(map).map(async([id, value]) => {
+		await Promise.all(Object.entries(map).map(async([msgId, value]) => {
 			try {
-				await publish({ messageId: id, ...value })
-				delete map[id]
+				await publish({ messageId: msgId, ...value })
+				delete map[msgId]
 			} catch(err) {
 				const { data, ...meta } = value
 
 				if(value.tries >= maxRetries) {
 					logger.error(
-						{ err, ...value },
+						{ err, msgId, ...value },
 						'failed to publish event after retries'
 					)
 				} else {
 					logger.error(
-						{ err, length: data.length, ...meta },
+						{ err, length: data.length, msgId, ...meta },
 						'error in publishing events'
 					)
 
