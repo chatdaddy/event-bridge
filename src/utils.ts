@@ -19,7 +19,7 @@ export function makeUqMessageId(
 }
 
 export function parseMessageId(id: string) {
-	if(!id.startsWith(msgPrefix)) {
+	if(!id?.startsWith(msgPrefix)) {
 		return
 	}
 

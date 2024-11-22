@@ -5,6 +5,7 @@ import type { Logger } from 'pino'
 export type Serializer<Event> = {
     encode<T = any>(obj: T, event: Event): Buffer
     decode<T = any>(enc: Buffer, event: Event): T
+	contentType: string
 }
 
 export type EventData<M, E extends keyof M> = {

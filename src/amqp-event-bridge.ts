@@ -4,8 +4,8 @@ import type { IAmqpConnectionManager } from 'amqp-connection-manager/dist/types/
 import type { PublishOptions } from 'amqp-connection-manager/dist/types/ChannelWrapper'
 import type { ConfirmChannel, ConsumeMessage } from 'amqplib'
 import P, { type Logger } from 'pino'
+import { V8Serializer } from './serializer/v8'
 import { makeEventBatcher } from './make-event-batcher'
-import { V8Serializer } from './serializer'
 import type { AMQPEventBridge, AMQPEventBridgeOptions, AMQPSubscription, EventData, OpenSubscription, Serializer } from './types'
 import { makeUqMessageId, parseMessageId } from './utils'
 
@@ -127,6 +127,7 @@ export function makeAmqpEventBridge<M>(
 					...DEFAULT_PUBLISH_OPTIONS,
 					...publishOptions,
 					messageId: msgId,
+					contentType: serializer.contentType,
 					headers: {
 						[EVENT_NAME_HEADER]: eventStr,
 						[OWNER_ID_HEADER]: ownerId,
@@ -382,10 +383,13 @@ function openSubscription<M>(
 			dlxRequeueCount,
 		})
 
-		let data: any
+		let data: any[]
 		try {
 			msgsBeingProcessed += 1
 			data = decode(msg.content, exchange)
+			if(!Array.isArray(data)) {
+				data = [data]
+			}
 
 			const parsed = parseMessageId(msgId)
 

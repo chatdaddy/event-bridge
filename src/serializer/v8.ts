@@ -1,5 +1,5 @@
 import { deserialize as V8Decode, serialize as V8Encode } from 'v8'
-import type { Serializer } from './types'
+import type { Serializer } from '../types'
 
 export const V8Serializer: Serializer<any> = {
 	encode: obj => {
@@ -10,5 +10,6 @@ export const V8Serializer: Serializer<any> = {
 			return V8Encode(obj)
 		}
 	},
-	decode: buff => V8Decode(buff)
+	decode: buff => V8Decode(buff),
+	contentType: 'nodejs/v8'
 }
