@@ -32,7 +32,7 @@ type EventBatcherConfig = {
 
 export type EventBatcherOptions<M> = EventBatcherConfig & {
 	/** actually flush the events */
-	publish<E extends keyof M>(d: EventData<M, E>): Promise<void>
+	flush<E extends keyof M>(d: EventData<M, E>): Promise<void>
 	logger: Logger
 }
 
@@ -139,6 +139,13 @@ export type AMQPSubscription<M> = {
 		 */
 		options?: Options.AssertQueue
 	}
+
+	/**
+	 * If set, the worker will wait for this amount of milliseconds,
+	 * or messages to reach the maxMessagesPerWorker, whichever comes first,
+	 * before processing the messages.
+	 */
+	batchProcessMs?: number
 }
 
 export type AMQPMultiSubscriberOptions<M> = AMQPBaseOptions<M> & {

@@ -61,7 +61,7 @@ export function makeAmqpEventBridge<M>(
 	const exchangesAsserted = new Set<string>()
 
 	const batcher = makeEventBatcher<M>({
-		publish,
+		flush: publish,
 		logger,
 		maxEventsForFlush: DEFAULT_MSGS_TO_FLUSH,
 		...batcherConfig,
@@ -115,7 +115,10 @@ export function makeAmqpEventBridge<M>(
 			subscriptions: openSubs,
 			publishNow: publish
 		},
-		...batcher,
+		publish(event, ownerId, data) {
+			return batcher.add({ event, ownerId, data })
+		},
+		flush: batcher.flush,
 		waitForOpen,
 		async sendDirect({ event, data, ownerId, queueName }) {
 			const eventStr = event.toString()

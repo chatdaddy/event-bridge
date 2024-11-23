@@ -9,11 +9,17 @@ type PendingEventMap<M> = {
 	[K in keyof M]?: { [ownerId: string]: M[K][] }
 }
 
-type PendingPublish<M, E extends keyof M> = EventData<M, E> & {
+type PendingFlush<M, E extends keyof M> = EventData<M, E> & {
 	tries: number
 }
 
-type PendingPublishMap<M> = { [key: string]: PendingPublish<M, keyof M> }
+type PendingFlushMap<M> = { [key: string]: PendingFlush<M, keyof M> }
+
+type AddToBatchOpts<M, E extends keyof M> = {
+	event: E
+	ownerId: string
+	data: M[E]
+}
 
 /**
  * Fn batches events by event type and owner id,
@@ -22,43 +28,43 @@ type PendingPublishMap<M> = { [key: string]: PendingPublish<M, keyof M> }
  * - when the threshold is reached
  * - when asked for using the flush() function
  *
- * Will automatically keep retrying failed publishes. If an event fails
- * to publish -- no guarantee is made that the event will be published
- * in order. However, the event will be retried until it is published.
+ * Will automatically keep retrying failed flushes. If an event fails
+ * to flush -- no guarantee is made that the event will be flushed
+ * in order. However, the event will be retried until it is flushed.
  *
  * @param options config options
  */
 export function makeEventBatcher<M>({
-	publish, logger,
+	flush: _flush, logger,
 	eventsPushIntervalMs,
 	maxEventsForFlush,
 	maxRetries = 3
 }: EventBatcherOptions<M>) {
 	logger = logger.child({ stream: 'events-manager' })
 
-	/// published event count
+	/// flushed event count
 	/// total pending events to flush
 	let pendingEventCount = 0
 	/// map of pending events
 	let events: PendingEventMap<M> = { }
 	/// regular flush interval
 	let timeout: NodeJS.Timeout | undefined = undefined
-	// store publishes that failed -- so they can be retried
-	const failedPublishes: PendingPublishMap<M> = {}
-	// create a promise chain to queue failed publishes
+	// store flushes that failed -- so they can be retried
+	const failedFlushes: PendingFlushMap<M> = {}
+	// create a promise chain to queue failed flushes
 	// avoids simultaneous retries
-	let failedPublishQueue = Promise.resolve()
+	let failedQueue = Promise.resolve()
 
 	return {
 		/**
 		 * add pending event to the existing batch.
-		 * Use flush() to publish immediately
+		 * Use flush() to flush immediately
 		 * */
-		publish<Event extends keyof M>(
-			event: Event,
-			ownerId: string,
-			data: M[Event],
-		) {
+		add<Event extends keyof M>({
+			event,
+			ownerId,
+			data,
+		}: AddToBatchOpts<M, Event>) {
 			let map = events[event]
 			if(!events[event]) {
 				map = { }
@@ -86,11 +92,11 @@ export function makeEventBatcher<M>({
 		logger.debug({ pendingEventCount }, 'flushing events...')
 
 		const eventCountToFlush = pendingEventCount
-		const pendingPublishes: PendingPublishMap<M> = { }
+		const pending: PendingFlushMap<M> = { }
 		for(const event in events) {
 			for(const ownerId in events[event]!) {
 				const id = makeUqMessageId()
-				pendingPublishes[id] = {
+				pending[id] = {
 					data: events[event]![ownerId],
 					event: event as keyof M,
 					ownerId,
@@ -106,17 +112,17 @@ export function makeEventBatcher<M>({
 		clearTimeout(timeout)
 		timeout = undefined
 
-		return postFlush(eventCountToFlush, pendingPublishes)
+		return postFlush(eventCountToFlush, pending)
 	}
 
-	async function postFlush(eventCount: number, batch: PendingPublishMap<M>) {
+	async function postFlush(eventCount: number, batch: PendingFlushMap<M>) {
 		await flushFailedMessages()
 
 		if(!eventCount) {
 			return
 		}
 
-		const failed = await publishBatch(batch)
+		const failed = await flushBatch(batch)
 		logger.debug(
 			{
 				total: eventCount,
@@ -125,18 +131,18 @@ export function makeEventBatcher<M>({
 			'flushed events'
 		)
 
-		// add to failed publishes -- so can be retried
-		Object.assign(failedPublishes, failed)
+		// add to failed flushes -- so can be retried
+		Object.assign(failedFlushes, failed)
 	}
 
 	async function flushFailedMessages() {
-		const failedCount = Object.keys(failedPublishes).length
+		const failedCount = Object.keys(failedFlushes).length
 		if(!failedCount) {
 			return
 		}
 
-		failedPublishQueue = failedPublishQueue
-			.then(() => publishBatch(failedPublishes))
+		failedQueue = failedQueue
+			.then(() => flushBatch(failedFlushes))
 			.then(failed => (
 				logger.info(
 					{
@@ -146,17 +152,17 @@ export function makeEventBatcher<M>({
 					'flushed failed events'
 				)
 			))
-		await failedPublishQueue
+		await failedQueue
 	}
 
 	/**
-	 * Publishes a batch of events
-	 * @returns map of failed publishes
+	 * Flushes a batch of events
+	 * @returns map of failed flushes
 	 */
-	async function publishBatch(map: PendingPublishMap<M>) {
+	async function flushBatch(map: PendingFlushMap<M>) {
 		await Promise.all(Object.entries(map).map(async([msgId, value]) => {
 			try {
-				await publish({ messageId: msgId, ...value })
+				await _flush({ messageId: msgId, ...value })
 				delete map[msgId]
 			} catch(err) {
 				const { data, ...meta } = value
@@ -164,12 +170,12 @@ export function makeEventBatcher<M>({
 				if(value.tries >= maxRetries) {
 					logger.error(
 						{ err, msgId, ...value },
-						'failed to publish event after retries'
+						'failed to flush event after retries'
 					)
 				} else {
 					logger.error(
 						{ err, length: data.length, msgId, ...meta },
-						'error in publishing events'
+						'error in flushing events'
 					)
 
 					value.tries += 1
