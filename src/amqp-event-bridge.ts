@@ -305,7 +305,7 @@ function openSubscription<M>(
 				arguments: {
 					...DEFAULT_QUEUE_OPTIONS.arguments,
 					...queueOptions?.arguments,
-					'x-delivery-limit': maxInitialRetries,
+					'x-delivery-limit': maxInitialRetries || undefined,
 				}
 			}
 		)
