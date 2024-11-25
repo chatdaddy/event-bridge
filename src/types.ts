@@ -18,7 +18,7 @@ export type EventData<M, E extends keyof M> = {
 	messageId?: string
 }
 
-type EventBatcherConfig = {
+export type EventBatcherConfig = {
 	/** regular flush interval */
 	eventsPushIntervalMs?: number
 	/** max events to take in before initiating a flush */
