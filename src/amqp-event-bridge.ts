@@ -157,6 +157,8 @@ export function makeAmqpEventBridge<M>(
 				await pubChannel.close()
 			}
 
+			await conn.close()
+
 			logger.info('closed event-bridge')
 		},
 	}
