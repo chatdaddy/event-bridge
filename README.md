@@ -114,6 +114,13 @@ const bridge = makeAmqpEventBridge<EventMap>({
         // retry after 1hr
         delayedRetrySeconds: 60 * 60,
       },
+
+      // will collect events for 250ms before combining them
+      // into a single data point & calls the onEvent handler
+      // once for the combined data. The messageId for this combined
+      // message will be a space separated list of the individual
+      // messageIds
+      batchConsumeIntervalMs: 250
     },
   ],
   batcherConfig: {

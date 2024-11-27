@@ -4,7 +4,7 @@ dotenv.config({ path: '.env.test' })
 import { randomBytes } from 'crypto'
 import P from 'pino'
 import { makeAmqpEventBridge } from '../amqp-event-bridge'
-import { AMQPEventBridge, AMQPEventBridgeOptions } from '../types'
+import { AMQPEventBridge, AMQPEventBridgeOptions, EventSubscriptionListener } from '../types'
 
 type TestEventMap = {
 	'my-cool-event': { value: number }
@@ -502,6 +502,94 @@ describe('AMQP Event Bridge Tests', () => {
 		await delay(500)
 		expect(dataRecv).toEqual(eventCount)
 		expect(recvTooMany).toBe(false)
+	})
+
+	it('should batch events', async() => {
+		const expectedOwnerId = randomBytes(2).toString('hex')
+		const eventCount = 15
+
+		const onEventMock = jest.fn<
+			ReturnType<EventSubscriptionListener<TestEventMap, keyof TestEventMap>>,
+			Parameters<EventSubscriptionListener<TestEventMap, keyof TestEventMap>>
+		>()
+
+		await openConnection({
+			onEvent: onEventMock,
+			batchConsumeIntervalMs: 1000,
+			maxMessagesPerWorker: eventCount
+		})
+
+		for(let i = 0; i < eventCount;i++) {
+			publisher.publish(
+				'another-cool-event',
+				expectedOwnerId,
+				{ text: 'abc ' + i }
+			)
+			await publisher.flush()
+		}
+
+		while(!onEventMock.mock.calls.length) {
+			await delay(50)
+		}
+
+		// wait a lil extra to ensure more events aren't pushed out
+		await delay(200)
+
+		expect(onEventMock).toHaveBeenCalledTimes(1)
+
+		const [evData] = onEventMock.mock.calls[0]
+		expect(evData.data).toHaveLength(eventCount)
+		// msgIds should be combined & be separated by spaces
+		expect(evData.msgId).toContain(' ')
+ 	})
+
+	it('should fail all if batch fails', async() => {
+		const expectedOwnerId = randomBytes(2).toString('hex')
+		const eventPushCount = 10
+
+		const onEventMock = jest.fn<
+			ReturnType<EventSubscriptionListener<TestEventMap, keyof TestEventMap>>,
+			Parameters<EventSubscriptionListener<TestEventMap, keyof TestEventMap>>
+		>()
+		onEventMock.mockImplementationOnce(async() => {
+			throw new Error('Test Error')
+		})
+
+		await openConnection({
+			onEvent: onEventMock,
+			queueConfig: {
+				maxInitialRetries: 1,
+				maxDelayedRetries: 0,
+			},
+			batchConsumeIntervalMs: 1000,
+			// we'll test what happens if the maxMessagesPerWorker
+			// threshold isn't matched in the batcher
+			maxMessagesPerWorker: eventPushCount + 1
+		})
+
+		for(let i = 0; i < eventPushCount;i++) {
+			publisher.publish(
+				'another-cool-event',
+				expectedOwnerId,
+				{ text: 'abc ' + i }
+			)
+			await publisher.flush()
+		}
+
+		// the event will be re-pushed after it failed, in that
+		// case the batching should've batched again -- thus leading
+		// to only 2 calls
+		while(onEventMock.mock.calls.length < 2) {
+			await delay(50)
+		}
+
+		// wait a lil extra to ensure more events aren't pushed out
+		await delay(200)
+
+		expect(onEventMock).toHaveBeenCalledTimes(2)
+		for(const [callData] of onEventMock.mock.calls) {
+			expect(callData.data).toHaveLength(eventPushCount)
+		}
 	})
 
 	// we want to ensure that whenever a connection is closed

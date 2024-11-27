@@ -223,6 +223,15 @@ type SubscriptionCtx = {
 	maxItemsToLog: number
 }
 
+type QueuedEventData<M> = {
+	[E in keyof M]: {
+		data: M[E][]
+		messageId: string | undefined
+		resolve(): void
+		reject(err: Error): void
+	}
+}
+
 function openSubscription<M>(
 	{
 		queueName = '',
@@ -234,7 +243,8 @@ function openSubscription<M>(
 			delayedRetrySeconds = DEFAULT_RETRY_DELAY_S,
 			maxDelayedRetries = 3,
 			options: queueOptions = {}
-		} = {}
+		} = {},
+		batchConsumeIntervalMs,
 	}: AMQPSubscription<M>,
 	{
 		conn,
@@ -249,6 +259,15 @@ function openSubscription<M>(
 	const dlxExchangeName = `${queueName}_dlx`
 	const dlxExchangeBackToQueue = `${queueName}_dlx_back_to_queue`
 	const dlxQueueName = `${queueName}_dlx_queue`
+
+	const consumeBatcher = batchConsumeIntervalMs
+		? makeEventBatcher<QueuedEventData<M>>({
+			maxEventsForFlush: maxMessagesPerWorker,
+			eventsPushIntervalMs: batchConsumeIntervalMs,
+			flush: flushBatch,
+			logger,
+		})
+		: undefined
 
 	let listenerTag: string | undefined
 	let msgsBeingProcessed = 0
@@ -274,6 +293,8 @@ function openSubscription<M>(
 					await channel.cancel(listenerTag)
 					logger.debug({ listenerTag }, 'cancelled listener')
 					listenerTag = undefined
+
+					await consumeBatcher?.flush()
 
 					while(msgsBeingProcessed > 0) {
 						await new Promise(r => setTimeout(r, 100))
@@ -409,15 +430,30 @@ function openSubscription<M>(
 				)
 			}
 
-			await onEvent({
-				ownerId,
-				msgId,
-				logger: _logger,
-				data,
-				event: exchange,
-			})
+			if(consumeBatcher) {
+				await new Promise<void>((resolve, reject) => {
+					consumeBatcher.add({
+						event: exchange,
+						data: {
+							data,
+							messageId: msgId,
+							reject,
+							resolve,
+						},
+						ownerId,
+					})
+				})
+			} else {
+				await onEvent({
+					ownerId,
+					msgId,
+					logger: _logger,
+					data,
+					event: exchange,
+				})
 
-			_logger.info('handled msg')
+				_logger.info('handled msg')
+			}
 
 			channel.ack(msg)
 		} catch(err) {
@@ -440,6 +476,43 @@ function openSubscription<M>(
 			channel.nack(msg, undefined, retryNow)
 		} finally {
 			msgsBeingProcessed -= 1
+		}
+	}
+
+	async function flushBatch({
+		data,
+		event,
+		ownerId
+	}: EventData<QueuedEventData<M>, keyof M>) {
+		const msgIds: string[] = []
+		for(const { messageId } of data) {
+			if(messageId) {
+				msgIds.push(messageId)
+			}
+		}
+
+		const msgId = msgIds.length ? msgIds.join(' ') : undefined
+
+		try {
+			const _logger = logger.child({ event, ownerId, msgId })
+			_logger.debug('processing batch')
+
+			await onEvent({
+				event,
+				ownerId,
+				data: data.flatMap(d => d.data),
+				logger: _logger,
+				msgId,
+			})
+			for(const { resolve } of data) {
+				resolve()
+			}
+
+			_logger.info('handled msgs')
+		} catch(err) {
+			for(const { reject } of data) {
+				reject(err)
+			}
 		}
 	}
 }

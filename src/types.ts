@@ -139,6 +139,12 @@ export type AMQPSubscription<M> = {
 		 */
 		options?: Options.AssertQueue
 	}
+
+	/**
+	 * Further batch events for consumers for the given number
+	 * of ms, or until maxMessagesPerWorker is reached.
+	 */
+	batchConsumeIntervalMs?: number
 }
 
 export type AMQPMultiSubscriberOptions<M> = AMQPBaseOptions<M> & {
