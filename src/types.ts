@@ -139,13 +139,6 @@ export type AMQPSubscription<M> = {
 		 */
 		options?: Options.AssertQueue
 	}
-
-	/**
-	 * If set, the worker will wait for this amount of milliseconds,
-	 * or messages to reach the maxMessagesPerWorker, whichever comes first,
-	 * before processing the messages.
-	 */
-	batchProcessMs?: number
 }
 
 export type AMQPMultiSubscriberOptions<M> = AMQPBaseOptions<M> & {

@@ -398,14 +398,16 @@ function openSubscription<M>(
 
 			const parsed = parseMessageId(msgId)
 
-			_logger.info(
-				{
-					eventTs: parsed?.dt,
-					data: data.slice(0, maxItemsToLog),
-					totalItems: data.length,
-				},
-				'handling msg'
-			)
+			if(maxItemsToLog !== 0) {
+				_logger.info(
+					{
+						eventTs: parsed?.dt,
+						data: data.slice(0, maxItemsToLog),
+						totalItems: data.length,
+					},
+					'handling msg'
+				)
+			}
 
 			await onEvent({
 				ownerId,
