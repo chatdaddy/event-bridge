@@ -35,11 +35,18 @@ type AddToBatchOpts<M, E extends keyof M> = {
  * @param options config options
  */
 export function makeEventBatcher<M>({
-	flush: _flush, logger,
+	publish: _publishData,
+	flush: _flush,
+	logger,
 	eventsPushIntervalMs,
 	maxEventsForFlush,
 	maxRetries = 3
 }: EventBatcherOptions<M>) {
+	// backwards compatibility
+	if(!_flush && _publishData) {
+		_flush = _publishData
+	}
+
 	logger = logger.child({ stream: 'events-manager' })
 
 	/// flushed event count

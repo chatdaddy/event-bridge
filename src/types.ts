@@ -33,6 +33,11 @@ export type EventBatcherConfig = {
 export type EventBatcherOptions<M> = EventBatcherConfig & {
 	/** actually flush the events */
 	flush<E extends keyof M>(d: EventData<M, E>): Promise<void>
+	/**
+	 * actually flush the events
+	 * @deprecated use flush instead
+	 * */
+	publish?<E extends keyof M>(d: EventData<M, E>): Promise<void>
 	logger: Logger
 }
 
