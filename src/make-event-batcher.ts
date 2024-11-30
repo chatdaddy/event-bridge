@@ -57,34 +57,46 @@ export function makeEventBatcher<M>({
 
 	return {
 		/**
+		 * @deprecated use add() instead
+		 */
+		publish<Event extends keyof M>(
+			event: Event,
+			ownerId: string,
+			data: M[Event]
+		) {
+			return add<Event>({ event, ownerId, data })
+		},
+		/**
 		 * add pending event to the existing batch.
 		 * Use flush() to flush immediately
 		 * */
-		add<Event extends keyof M>({
-			event,
-			ownerId,
-			data,
-		}: AddToBatchOpts<M, Event>) {
-			let map = events[event]
-			if(!events[event]) {
-				map = { }
-				events[event] = map
-			}
-
-			if(!map![ownerId]) {
-				(map as any)[ownerId] = []
-			}
-
-			map![ownerId].push({ ...data })
-			pendingEventCount += 1
-
-			startTimeout()
-
-			if(pendingEventCount >= maxEventsForFlush) {
-				flush()
-			}
-		},
+		add,
 		flush,
+	}
+
+	function add<Event extends keyof M>({
+		event,
+		ownerId,
+		data,
+	}: AddToBatchOpts<M, Event>) {
+		let map = events[event]
+		if(!events[event]) {
+			map = { }
+			events[event] = map
+		}
+
+		if(!map![ownerId]) {
+			(map as any)[ownerId] = []
+		}
+
+		map![ownerId].push({ ...data })
+		pendingEventCount += 1
+
+		startTimeout()
+
+		if(pendingEventCount >= maxEventsForFlush) {
+			flush()
+		}
 	}
 
 	/** push out all pending events */
