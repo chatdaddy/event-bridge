@@ -81,6 +81,12 @@ type AMQPBaseOptions<M> = {
 	 * @default 50
 	 */
 	maxItemsToLog?: number
+	/**
+	 * Logging mode -- if set to 'errors', only errors will be logged,
+	 * otherwise will log each event data as well.
+	 * @default 'all'
+	 */
+	loggingMode?: 'all' | 'errors'
 }
 
 type SendDirectOpts<M, T extends keyof M> = {

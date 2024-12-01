@@ -46,6 +46,7 @@ export function makeAmqpEventBridge<M>(
 		publishOptions,
 		batcherConfig,
 		maxItemsToLog = 50,
+		loggingMode,
 		...rest
 	}: AMQPEventBridgeOptions<M>
 ): AMQPEventBridge<M> {
@@ -82,6 +83,7 @@ export function makeAmqpEventBridge<M>(
 				logger: subscriptions.length > 1
 					? logger.child({ queueName: sub.queueName })
 					: logger,
+				loggingMode,
 				decode: serializer.decode,
 				assertExchangeIfRequired,
 			})
@@ -221,6 +223,7 @@ type SubscriptionCtx = {
 		channel: ConfirmChannel
 	): Promise<void>
 	maxItemsToLog: number
+	loggingMode?: 'all' | 'errors'
 }
 
 type QueuedEventData<M> = {
@@ -251,7 +254,8 @@ function openSubscription<M>(
 		logger,
 		decode,
 		assertExchangeIfRequired,
-		maxItemsToLog
+		maxItemsToLog,
+		loggingMode = 'all',
 	}: SubscriptionCtx
 ): OpenSubscription {
 	type E = keyof M
@@ -419,7 +423,7 @@ function openSubscription<M>(
 
 			const parsed = parseMessageId(msgId)
 
-			if(maxItemsToLog !== 0) {
+			if(loggingMode === 'all') {
 				_logger.info(
 					{
 						eventTs: parsed?.dt,
@@ -452,15 +456,28 @@ function openSubscription<M>(
 					event: exchange,
 				})
 
-				_logger.info('handled msg')
+				if(loggingMode === 'all') {
+					_logger.info('handled msg')
+				}
 			}
 
 			channel.ack(msg)
 		} catch(err) {
-			if(dlxRequeueCount && dlxRequeueCount >= maxDelayedRetries) {
+			if(
+				(dlxRequeueCount && dlxRequeueCount >= maxDelayedRetries)
+				|| (
+					!maxDelayedRetries
+					&& retryCount >= maxInitialRetries
+				)
+			) {
 				_logger.error(
-					{ err },
-					'error in handling msg. Final DLX retries exceeded.'
+					{
+						err,
+						data: loggingMode === 'errors'
+							? data!?.slice(0, maxItemsToLog)
+							: undefined
+					},
+					'error in handling msg. Final retries exceeded.'
 					+ ' Will not requeue'
 				)
 				channel.ack(msg)
@@ -508,7 +525,9 @@ function openSubscription<M>(
 				resolve()
 			}
 
-			_logger.info('handled msgs')
+			if(loggingMode === 'all') {
+				_logger.info('handled msgs')
+			}
 		} catch(err) {
 			for(const { reject } of data) {
 				reject(err)
