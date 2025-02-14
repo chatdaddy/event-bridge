@@ -230,6 +230,7 @@ type QueuedEventData<M> = {
 	[E in keyof M]: {
 		data: M[E][]
 		messageId: string | undefined
+		retryCount: number
 		resolve(): void
 		reject(err: Error): void
 	}
@@ -441,6 +442,7 @@ function openSubscription<M>(
 						data: {
 							data,
 							messageId: msgId,
+							retryCount,
 							reject,
 							resolve,
 						},
@@ -454,6 +456,7 @@ function openSubscription<M>(
 					logger: _logger,
 					data,
 					event: exchange,
+					retryCount
 				})
 
 				if(loggingMode === 'all') {
@@ -501,11 +504,15 @@ function openSubscription<M>(
 		event,
 		ownerId
 	}: EventData<QueuedEventData<M>, keyof M>) {
+
+		let maxRetryCount = 0
 		const msgIds: string[] = []
-		for(const { messageId } of data) {
+		for(const { messageId, retryCount } of data) {
 			if(messageId) {
 				msgIds.push(messageId)
 			}
+
+			maxRetryCount = Math.max(maxRetryCount, retryCount)
 		}
 
 		const msgId = msgIds.length ? msgIds.join(' ') : undefined
@@ -520,6 +527,7 @@ function openSubscription<M>(
 				data: data.flatMap(d => d.data),
 				logger: _logger,
 				msgId,
+				retryCount: maxRetryCount,
 			})
 			for(const { resolve } of data) {
 				resolve()

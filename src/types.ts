@@ -54,6 +54,10 @@ export type EventSubscriptionData<M, T extends keyof M> = {
 	 * Message ID of this event
 	 */
 	msgId?: string
+	/**
+	 * Which retry attempt this is, 0 means first attempt (no retry)
+	 */
+	retryCount: number
 	logger: Logger
 } & DataWEvent<M>[T]
 
