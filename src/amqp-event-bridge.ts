@@ -400,11 +400,12 @@ function openSubscription<M>(
 		// owner ID is in the routing key
 		const ownerId = msg.properties.headers?.[OWNER_ID_HEADER]
 			|| msg.fields.routingKey
-		const retryCount = +(
+		const deliveryCount = +(
 			msg.properties.headers?.['x-delivery-count'] || 0
 		)
 		const dlxRequeue = msg.properties.headers?.['x-death']
 		const dlxRequeueCount = dlxRequeue?.[0]?.count
+		const retryCount = deliveryCount + (dlxRequeueCount || 0)
 
 		const _logger = logger.child({
 			exchange,
